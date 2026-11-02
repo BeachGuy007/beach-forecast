@@ -10,8 +10,8 @@
   It calls NWS (api.weather.gov) and Open-Meteo straight from your browser, so it
   will NOT work inside a sandboxed/hosted preview that blocks outside requests.
   Logic is a port of beach_forecast_core.py: 50/50 NWS/Open-Meteo for temps/wind,
-  one feels-like formula, sun% = 100 - cloud. Rain day 0 = max(NWS grid, OM, HRRR,
-  NBM, NWS hourly); day 1 = max(NWS, OM, HRRR, NBM); day 2+ = 50/50. Sun always
+  one feels-like formula, sun% = 100 - cloud. Rain = plain average of the
+  available sources. Sun always
   50/50; precip-imminent from NWS hourly can force NO-GO.
 -->
 <style>
@@ -225,7 +225,7 @@ const smoothedPeak = vals => {
 /* --------------------------------------------------------------- fetchers */
 async function fetchOM(b) {
   const u = "https://api.open-meteo.com/v1/forecast?latitude=" + b.lat + "&longitude=" + b.lon +
-    "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,cloud_cover,cloud_cover_low,cloud_cover_mid,wind_speed_10m" +
+    "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,cloud_cover,wind_speed_10m" +
     "&daily=sunrise&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FNew_York&forecast_days=8";
   return getJson(u);
 }
@@ -399,13 +399,26 @@ function nwsDay(nws, date, hours, prevDate) {
           rain: nwsWindowPop(nws.pop[date], hours, nws.pop[prevDate]),
           wind: wv.length ? Math.max(...wv) : null};
 }
-function omDay(om, date, hours) {
+const CLOUD_MODELS = ["ecmwf_ifs025", "gfs_seamless", "icon_seamless", "gem_seamless"];
+async function fetchCloud(b) {   // mean total cloud cover across models: {date: {hour: pct}}
+  const d = await getJson("https://api.open-meteo.com/v1/forecast?latitude=" + b.lat + "&longitude=" + b.lon +
+    "&hourly=cloud_cover&models=" + CLOUD_MODELS.join(",") + "&timezone=America%2FNew_York&forecast_days=8");
+  const out = {}, H = d?.hourly;
+  if (!H?.time) return out;
+  const cols = CLOUD_MODELS.map(m => H["cloud_cover_" + m]).filter(c => Array.isArray(c) && c.length === H.time.length);
+  H.time.forEach((ts, i) => {
+    const v = cols.map(c => c[i]).filter(x => x != null);
+    if (v.length) (out[ts.slice(0, 10)] ??= {})[+ts.slice(11, 13)] = v.reduce((a, x) => a + x, 0) / v.length;
+  });
+  return out;
+}
+function omDay(om, date, hours, cloudMap = {}) {
   if (!om?.hourly) return null;
   const H = om.hourly, rows = [];
   H.time.forEach((ts, i) => {
     const [d, hh] = ts.split("T"); const h = +hh.slice(0, 2);
     if (d === date && hours.includes(h)) rows.push({h, t: H.temperature_2m[i], rh: H.relative_humidity_2m[i],
-      rain: H.precipitation_probability[i], cloud: H.cloud_cover[i], wind: H.wind_speed_10m[i], cl_: H.cloud_cover_low?.[i] ?? null, cm_: H.cloud_cover_mid?.[i] ?? null});
+      rain: H.precipitation_probability[i], cloud: cloudMap[d]?.[h] ?? H.cloud_cover[i], wind: H.wind_speed_10m[i]});
   });
   const warm = rows.filter(r => r.t != null);
   if (!warm.length) return null;
@@ -413,11 +426,8 @@ function omDay(om, date, hours) {
   const s = summarizeFeels(feelsH);
   const rain = rows.map(r => r.rain).filter(v => v != null), cl = rows.map(r => r.cloud).filter(v => v != null),
         w = rows.map(r => r.wind).filter(v => v != null);
-  const skyCC = cl.length ? Math.round(avg(cl)) : null;
-  // sun-blocking cloud = low + mid layers (random overlap); thin high cloud ignored. Same as the Python core.
-  const eff = rows.map(r => (r.cl_ != null && r.cm_ != null) ? 100 * (1 - (1 - r.cl_ / 100) * (1 - r.cm_ / 100)) : r.cloud).filter(v => v != null);
-  const sky = eff.length ? Math.round(avg(eff)) : skyCC;
-  return {feelsH, feelsLow: s.low, feelsAvg: s.avg, sky, skyCC, sun: sky == null ? null : 100 - sky,
+  const sky = cl.length ? Math.round(avg(cl)) : null;
+  return {feelsH, feelsLow: s.low, feelsAvg: s.avg, sky, sun: sky == null ? null : 100 - sky,
           rain: smoothedPeak(rain), wind: w.length ? Math.round(Math.max(...w)) : null};
 }
 
@@ -438,16 +448,10 @@ function mergeHourly(n, o) {
 function resolve(n, o, dOut, extras = {}) {
   n = n || {}; o = o || {};
   const {hrrr = null, nbm = null, hourlyRain = null} = extras;
-  let rain;
-  if (dOut === 0) {
-    const c = [n.rain, o.rain, hrrr, nbm, hourlyRain].filter(x => x != null);
-    rain = c.length ? Math.max(...c) : null;
-  } else if (dOut === 1) {
-    const c = [n.rain, o.rain, hrrr, nbm].filter(x => x != null);
-    rain = c.length ? Math.max(...c) : null;
-  } else {
-    rain = blend(n.rain, o.rain);
-  }
+  // plain average of every source that has a value (same rule as the Python script)
+  const srcs = dOut === 0 ? [n.rain, o.rain, hrrr, nbm, hourlyRain] : dOut === 1 ? [n.rain, o.rain, hrrr, nbm] : [n.rain, o.rain];
+  const rv = srcs.filter(x => x != null);
+  const rain = rv.length ? rv.reduce((a, x) => a + x, 0) / rv.length : null;
   const sky = blend(n.sky, o.sky);
   // Coldest / avg feels from hour-by-hour 50/50 series (matches Used grid)
   const feelsHourly = mergeHourly(n.feelsH, o.feelsH);
@@ -467,13 +471,15 @@ function resolve(n, o, dOut, extras = {}) {
 /* --------------------------------------------------------------- decision */
 function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
   const nogo = [];
+  let radarIdx = -1;   // index of the last rain-related reason
   const missing = [["feels", avgFeels], ["wind", wind], ["rain", rain], ["sun", sun]].filter(([, v]) => v == null).map(([k]) => k);
   if (avgFeels != null && avgFeels < GO_AVG_FEELS_MIN) nogo.push(`feels ${avgFeels.toFixed(0)}° < ${GO_AVG_FEELS_MIN}°`);
   if (feelsLow != null && feelsLow < GO_FEELS_LOW_MIN) nogo.push(`coldest hour ${feelsLow.toFixed(0)}° < ${GO_FEELS_LOW_MIN}°`);
   if (wind != null && wind >= GO_WIND_NOGO) nogo.push(`wind ${wind.toFixed(0)} ≥ ${GO_WIND_NOGO} mph`);
-  if (rain != null && rain >= GO_RAIN_NOGO) nogo.push(`rain ${rain.toFixed(0)}% ≥ ${GO_RAIN_NOGO}%`);
+  if (rain != null && rain >= GO_RAIN_NOGO) { nogo.push(`rain ${rain.toFixed(0)}% ≥ ${GO_RAIN_NOGO}%`); radarIdx = nogo.length - 1; }
   if (sun != null && sun < GO_SUN_MIN) nogo.push(`sun ${sun.toFixed(0)}% < ${GO_SUN_MIN}%`);
-  if (precipWhy) nogo.push(precipWhy);
+  if (precipWhy) { nogo.push(precipWhy); radarIdx = nogo.length - 1; }
+  if (radarIdx >= 0) nogo[radarIdx] += " (check radar)";
   if (redTide === "moderate" || redTide === "severe") nogo.push(`red tide ${redTide}`);
   if (nogo.length) return {label: "NO-GO", why: nogo.join("; ")};
   if (missing.length) return {label: "UNKNOWN", why: "missing: " + missing.join(", ")};
@@ -482,8 +488,8 @@ function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
 
 /* ----------------------------------------------------------- beach pipeline */
 async function evaluateBeach(b, dates) {
-  const [om, hrrr, nbm, rt, nwsRaw, hourly] = await Promise.all([
-    fetchOM(b), fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b)
+  const [om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
+    fetchOM(b), fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
   ]);
   const sunrise = {};
   (om?.daily?.time || []).forEach((d, i) => {
@@ -493,19 +499,20 @@ async function evaluateBeach(b, dates) {
     const dOut = daysOut(date);
     const hours = windowHours(sunrise[date] ?? null);
     const prev = etParts(new Date(Date.parse(date + "T12:00:00Z") - 86400000)).date;
-    const n = nwsDay(nwsRaw, date, hours, prev), o = omDay(om, date, hours);
+    const n = nwsDay(nwsRaw, date, hours, prev), o = omDay(om, date, hours, cloudMap);
     const hourlyRain = dOut === 0 ? nwsHourlyWindowRain(hourly, date, hours) : null;
     const u = resolve(n, o, dOut, {hrrr: hrrr[date], nbm: nbm[date], hourlyRain});
     const sun = u.sky == null ? null : Math.max(0, 100 - Math.round(u.sky));
     const rt_sev = rt.status === "detected" ? rt.severity : null;
     const imm = dOut === 0 ? precipImminent(hourly, date, hours) : {flag: false, why: ""};
+    const passed = dOut === 0 && etParts(new Date()).hour > Math.max(...hours);
     const d = decide({avgFeels: u.feelsAvg, wind: u.wind, rain: u.rain == null ? null : Math.round(u.rain), sun,
                       feelsLow: u.feelsLow, redTide: rt_sev, precipWhy: imm.flag ? imm.why : null});
     let coldH = null, coldV = Infinity;
     for (const [h, v] of Object.entries(u.feelsHourly)) if (v < coldV) { coldV = v; coldH = +h; }
     return {date, hours, n, o, u, sun, rain: u.rain == null ? null : Math.round(u.rain),
             hrrr: hrrr[date] ?? null, nbm: nbm[date] ?? null, hourlyRain,
-            coldH, ...d};
+            coldH, ...(passed ? {label: "PASSED", why: "window has ended"} : d)};
   });
   return {beach: b, rows, rt, sources: {nws: !!nwsRaw, om: !!om}};
 }
@@ -575,8 +582,8 @@ if (typeof document !== "undefined") {
       `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent (day 0, NWS hourly, inside the window) · red tide moderate/severe. ` +
       `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>GO</b> otherwise. Red values break a rule. ` +
       `Feels-like: one formula for both sources (wind chill ≤50°F, heat index ≥80°F, air temp between). ` +
-      `Rain day 0 = max(NWS grid, OM, HRRR, NBM, NWS hourly); day 1 = max(NWS, OM, HRRR, NBM); day 2+ = blend of NWS/OM. ` +
-      `Sun = average of NWS sky cover and Open-Meteo low+mid cloud. ` +
+      `Rain = plain average of every available source (day 0: NWS grid, OM, HRRR, NBM, NWS hourly; day 1: first four; day 2+: NWS, OM). ` +
+      `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud. ` +
       `Wind is the window maximum. No weather score or crowd model on this page.`;
   }
   buildUI();
