@@ -230,22 +230,23 @@ async function fetchOM(b) {
     "&daily=sunrise&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FNew_York&forecast_days=8";
   return getJson(u);
 }
-async function fetchOmModelRain(b, model, days = 2) {
+async function fetchOmModelRain(b, model, days = 2, matchHours = null) {
   const u = "https://api.open-meteo.com/v1/gfs?latitude=" + b.lat + "&longitude=" + b.lon +
     "&hourly=precipitation_probability&models=" + model + "&timezone=America%2FNew_York&forecast_days=" + days;
   const d = await getJson(u, 1), out = {};
   const t = d?.hourly?.time, p = d?.hourly?.precipitation_probability;
   if (!t || !p || t.length !== p.length) return out;
   const g = {};
+  const isInWindow = matchHours ? (date, h) => matchHours(date, h) : (date, h) => h >= WIN_START && h <= WIN_END;
   t.forEach((ts, i) => {
     const [date, hh] = ts.split("T"), h = +hh.slice(0, 2);
-    if (p[i] != null && h >= WIN_START && h <= WIN_END) (g[date] ??= []).push(p[i]);
+    if (p[i] != null && isInWindow(date, h)) (g[date] ??= []).push(p[i]);
   });
   for (const [d2, v] of Object.entries(g)) { const pk = smoothedPeak(v); if (pk != null) out[d2] = pk; }
   return out;
 }
-async function fetchHRRR(b) { return fetchOmModelRain(b, "gfs_hrrr", 2); }
-async function fetchNBM(b) { return fetchOmModelRain(b, "ncep_nbm_conus", 3); }
+async function fetchHRRR(b, matchHours = null) { return fetchOmModelRain(b, "gfs_hrrr", 2, matchHours); }
+async function fetchNBM(b, matchHours = null) { return fetchOmModelRain(b, "ncep_nbm_conus", 3, matchHours); }
 
 async function fetchNWSHourly(b) {
   const pts = await getJson(`https://api.weather.gov/points/${b.lat.toFixed(4)},${b.lon.toFixed(4)}`, 1);
@@ -345,7 +346,7 @@ async function fetchRipFromSrf() {
     if (!body) return null;
     const zones = ["FLZ050", "FLZ151", "FLZ155", "FLZ160", "FLZ162"];   // same zones as the Python script
     const found = [];
-    const re = /Rip\s+Current\s+Risk\*?\.+\s*(Low|Moderate|High|Extreme)\b/gi;
+    const re = /Rip\s+Current\s+Risk\*?\.\s*(Low|Moderate|High|Extreme)\b/gi;
     for (const block of body.split("$$")) {
       if (!zones.some(z => block.slice(0, 300).includes(z))) continue;
       let m;
@@ -489,13 +490,15 @@ function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
 
 /* ----------------------------------------------------------- beach pipeline */
 async function evaluateBeach(b, dates) {
-  const [om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
-    fetchOM(b), fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
-  ]);
+  const om = await fetchOM(b);
   const sunrise = {};
   (om?.daily?.time || []).forEach((d, i) => {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
   });
+  const hourMatcher = (date, h) => windowHours(sunrise[date] ?? null).includes(h);
+  const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
+    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
+  ]);
   const rows = dates.map((date, i) => {
     const dOut = daysOut(date);
     const hours = windowHours(sunrise[date] ?? null);
@@ -521,7 +524,7 @@ async function evaluateBeach(b, dates) {
 
 /* ----------------------------------------------------------------------- UI */
 if (typeof document !== "undefined") {
-  const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const esc = s => String(s).replace(/[&<>\"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
   const f = (v, u = "") => v == null ? "—" : v + u;
   const cls = l => l === "GO" ? "go" : l === "NO-GO" ? "nogo" : "unknown";
   const stack = (used, n, o, u) => `${f(used, u)}<span class="small">NWS ${f(n, u)} · OM ${f(o, u)}</span>`;
