@@ -71,6 +71,7 @@ let WIN_START = 6, WIN_END = 10;            // inclusive hours; override with ?w
 const DAYLIGHT_LEAD_H = 0.75;               // start ~45 min before sunrise
 const RAIN_EVENT_H = 3, POP_LONG_BLOCK_H = 6;
 const BLEND_NWS = 0.5;                      // equal NWS / Open-Meteo
+const BATCH_SIZE = 2;                       // keep browser fetches bounded for All beaches
 let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 20, GO_RAIN_NOGO = 45, GO_SUN_MIN = 50;
 const PRIMARY = "Siesta Key";
 const pointCache = new Map();
@@ -354,17 +355,17 @@ async function fetchRipFromSrf() {
     if (!body) return null;
     const zones = ["FLZ050", "FLZ151", "FLZ155", "FLZ160", "FLZ162"];   // same zones as the Python script
     const found = [];
-    const re = /Rip\s+Current\s+Risk\b[^A-Za-z]*(Low|Moderate|High|Extreme)\b/gi;
+    const re = /Rip\s+Current\s+Risk\*?\.+\s*(Low|Moderate|High|Extreme)\b/gi;
     for (const block of body.split("$$")) {
       if (!zones.some(z => block.slice(0, 300).includes(z))) continue;
       let m;
-      while ((m = re.exec(block)) !== null) {
+      const local = new RegExp(re.source, "gi");
+      while ((m = local.exec(block)) !== null) {
         const raw = m[1];
         const lvl = raw.toLowerCase() === "extreme" ? "High"
           : raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
         if (lvl in RIP_ORDER) found.push(lvl);
       }
-      re.lastIndex = 0;
     }
     if (!found.length) return null;
     return found.reduce((a, b) => (RIP_ORDER[b] > RIP_ORDER[a] ? b : a));
@@ -458,12 +459,11 @@ function mergeHourly(n, o) {
 function resolve(n, o, dOut, extras = {}) {
   n = n || {}; o = o || {};
   const {hrrr = null, nbm = null, hourlyRain = null} = extras;
-  // plain average of every source that has a value (same rule as the Python script)
   const srcs = dOut === 0 ? [n.rain, o.rain, hrrr, nbm, hourlyRain] : dOut === 1 ? [n.rain, o.rain, hrrr, nbm] : [n.rain, o.rain];
-  const rv = srcs.filter(x => x != null);
-  const rain = rv.length ? rv.reduce((a, x) => a + x, 0) / rv.length : null;
+  const valid = srcs.filter(x => x != null);
+  const rain = valid.length ? valid.reduce((a, x) => a + x, 0) / valid.length : null;
+  const rainSpread = valid.length ? {min: Math.min(...valid), max: Math.max(...valid), count: valid.length} : null;
   const sky = blend(n.sky, o.sky);
-  // Coldest / avg feels from hour-by-hour 50/50 series (matches Used grid)
   const feelsHourly = mergeHourly(n.feelsH, o.feelsH);
   const fvals = Object.values(feelsHourly);
   const feelsLow = fvals.length ? Math.min(...fvals) : rnd(blend(n.feelsLow, o.feelsLow));
@@ -473,6 +473,7 @@ function resolve(n, o, dOut, extras = {}) {
     feelsLow,
     wind: rnd(blend(n.wind, o.wind)),
     rain,
+    rainSpread,
     sky,
     feelsHourly,
   };
@@ -498,15 +499,13 @@ function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
 
 /* ----------------------------------------------------------- beach pipeline */
 async function evaluateBeach(b, dates) {
-  const om = await fetchOM(b);
+  const [om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
+    fetchOM(b), fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
+  ]);
   const sunrise = {};
   (om?.daily?.time || []).forEach((d, i) => {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
   });
-  const hourMatcher = (date, h) => windowHours(sunrise[date] ?? null).includes(h);
-  const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
-    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
-  ]);
   const rows = dates.map((date, i) => {
     const dOut = daysOut(date);
     const hours = windowHours(sunrise[date] ?? null);
@@ -568,7 +567,7 @@ if (typeof document !== "undefined") {
       !src.redtide && "Red tide unavailable",
     ].filter(Boolean);
     const warn = sourceWarn.length
-      ? `<p class="err">Source status: ${sourceWarn.join("; ")}. Rain estimate uses whatever sources are present.</p>`
+      ? `<p class="err">Source status: ${sourceWarn.join("; ")}. Fallbacks in use: any unavailable source is omitted from the rain average.</p>`
       : "";
     const rows = res.rows.map(r => {
       const label = new Date(r.date + "T12:00:00").toLocaleDateString("en-US", {weekday: "short", month: "numeric", day: "numeric"});
@@ -578,6 +577,7 @@ if (typeof document !== "undefined") {
       const sunCls = r.sun != null && r.sun < GO_SUN_MIN ? "bad" : "";
       const rainCls = r.rain != null && r.rain >= GO_RAIN_NOGO ? "bad" : "";
       const windCls = r.u.wind != null && r.u.wind >= GO_WIND_NOGO ? "bad" : "";
+      const rainSpread = r.u.rainSpread ? ` · spread ${r.u.rainSpread.min}%–${r.u.rainSpread.max}% (${r.u.rainSpread.count} sources)` : "";
       const rainExtra = [
         r.hrrr != null ? `HRRR ${r.hrrr}%` : null,
         r.nbm != null ? `NBM ${r.nbm}%` : null,
@@ -588,7 +588,7 @@ if (typeof document !== "undefined") {
         <td class="call ${cls(r.label)}">${r.label}</td>
         <td class="${avgCls}">${f(r.u.feelsAvg, "°")}<details data-k="${esc(b.name)}|${r.date}"><summary>hourly</summary>${hourlyGrid(r)}</details></td>
         <td class="${coldCls}">${f(r.u.feelsLow, "°")}<span class="small">${r.coldH == null ? "" : "at " + hourLabel(r.coldH)}</span></td>
-        <td class="${rainCls}">${f(r.rain, "%")}<span class="small">NWS ${f(r.n?.rain, "%")} · OM ${f(r.o?.rain, "%")}${rainExtra}</span></td>
+        <td class="${rainCls}">${f(r.rain, "%")}<span class="small">NWS ${f(r.n?.rain, "%")} · OM ${f(r.o?.rain, "%")}${rainExtra}${rainSpread}</span></td>
         <td class="${sunCls}">${f(r.sun, "%")}<span class="small">NWS ${r.n?.sky == null ? "—" : 100 - r.n.sky + "%"} · OM ${f(r.o?.sun, "%")}</span></td>
         <td class="${windCls}">${f(r.u.wind, " mph")}<span class="small">NWS ${f(r.n?.wind)} · OM ${f(r.o?.wind)}</span></td>
         <td class="why">${esc(r.why)}</td></tr>`;
@@ -631,9 +631,14 @@ if (typeof document !== "undefined") {
       let rip = null;
       try { rip = await fetchRip(); } catch (_) { /* informational only */ }
       out.insertAdjacentHTML("afterbegin", `<p class="meta">Rip current today (informational, never decides): ${esc(rip ?? "unavailable")}</p>`);
-      for (let i = 0; i < list.length; i++) {
-        status.textContent = `Loading ${list[i].name} (${i + 1}/${list.length})…`;
-        out.insertAdjacentHTML("beforeend", render(await evaluateBeach(list[i], dates)));
+
+      for (let i = 0; i < list.length; i += BATCH_SIZE) {
+        const batch = list.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(batch.map(async (b) => {
+          status.textContent = `Loading ${b.name} (${i + 1}/${list.length})…`;
+          return await evaluateBeach(b, dates);
+        }));
+        batchResults.forEach(res => out.insertAdjacentHTML("beforeend", render(res)));
       }
       out.querySelectorAll("details").forEach(d => { if (openKeys.has(d.dataset.k)) d.open = true; });
       status.textContent = "Updated " + new Date().toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
