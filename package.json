@@ -1,7 +1,9 @@
 {
   "name": "beach-forecast",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
+  "description": "Live beach go/no-go dashboard (single-file, no build step)",
   "scripts": {
     "test": "node --test"
   }

@@ -2,61 +2,63 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Beach Go/No-Go</title>
 <!--
-  Live Beach Go/No-Go (6-10am). One file, no build step.
-  Open it directly in a browser (double-click) or host it anywhere.
-  It calls NWS (api.weather.gov) and Open-Meteo straight from your browser, so it
-  will NOT work inside a sandboxed/hosted preview that blocks outside requests.
-  Logic is a port of beach_forecast_core.py: 50/50 NWS/Open-Meteo for temps/wind,
-  one feels-like formula, sun% = 100 - cloud. Rain = plain average of the
-  available sources. Sun always
-  50/50; precip-imminent from NWS hourly can force NO-GO.
+  Live Beach Go/No-Go. One file, no build step; host it anywhere (GitHub Pages works).
+  It calls NWS (api.weather.gov), Open-Meteo and FWC straight from the browser.
+  Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for temperature and
+  wind, one feels-like formula, sun % = 100 - cloud cover, rain = average of two source
+  families (NWS and Open-Meteo). NWS hourly can force a NO-GO when rain is imminent.
+  Water quality and the crowd model are only in the Python reports.
 -->
 <style>
-:root{
-  --bg:#ffffff; --fg:#111111; --muted:#5f6670; --line:#cfd4da; --head:#eef2f7; --card:#fafbfc;
-  --go:#0b6a0b; --nogo:#c62828; --unk:#666666; --bad:#c62828; --accent:#0047b3;
-}
-@media (prefers-color-scheme: dark){
-  :root{ --bg:#121417; --fg:#e8eaed; --muted:#9aa0a6; --line:#3a3f45; --head:#1e2328; --card:#181b1f;
-         --go:#4cc26b; --nogo:#ff6b6b; --unk:#a0a6ad; --bad:#ff6b6b; --accent:#7aa7ff; }
-}
-*{box-sizing:border-box}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-h1{font-size:20px;margin:0 0 2px}
-.sub{color:var(--muted);margin:0 0 12px}
-.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
-select,button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
-button{cursor:pointer}
-.status{color:var(--muted)}
-h2{font-size:17px;margin:22px 0 2px}
-.meta{color:var(--muted);margin:2px 0 8px}
-.wrap{overflow-x:auto}
-table{border-collapse:collapse;width:100%;min-width:720px}
-th,td{border:1px solid var(--line);padding:6px 8px;text-align:center;vertical-align:top}
-th{background:var(--head);white-space:nowrap}
-td.call{font-weight:700;font-size:15px}
-td.why{text-align:left}
-.small{display:block;color:var(--muted);font-size:11px;line-height:1.25}
-.bad{color:var(--bad);font-weight:700}
-.go{color:var(--go)} .nogo{color:var(--nogo)} .unknown{color:var(--unk)}
-details summary{cursor:pointer;color:var(--accent);font-size:12px}
-.hgrid{border-collapse:collapse;margin:6px auto 0;min-width:0;width:auto;font-size:11px}
-.hgrid td,.hgrid th{border:none;padding:1px 5px;background:transparent}
-.hgrid th{color:var(--muted);font-weight:400}
-.err{color:var(--bad)}
-.legend{margin-top:22px;color:var(--muted);font-size:12px}
-a{color:var(--accent)}
+  :root{
+    --bg:#ffffff; --fg:#111111; --muted:#5f6670; --line:#cfd4da; --head:#eef2f7; --card:#fafbfc;
+    --go:#0b6a0b; --nogo:#c62828; --unk:#666666; --bad:#c62828; --accent:#0047b3;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#121417; --fg:#e8eaed; --muted:#9aa0a6; --line:#3a3f45; --head:#1e2328; --card:#181b1f;
+           --go:#4cc26b; --nogo:#ff6b6b; --unk:#a0a6ad; --bad:#ff6b6b; --accent:#7aa7ff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--muted);margin:0 0 12px}
+  .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+  select,button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+  button{cursor:pointer}
+  .status{color:var(--muted)}
+  h2{font-size:17px;margin:22px 0 2px}
+  .meta{color:var(--muted);margin:2px 0 8px}
+  .wrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:720px}
+  th,td{border:1px solid var(--line);padding:6px 8px;text-align:center;vertical-align:top}
+  th{background:var(--head);white-space:nowrap}
+  td.call{font-weight:700;font-size:15px}
+  td.why{text-align:left}
+  .small{display:block;color:var(--muted);font-size:11px;line-height:1.25}
+  .bad{color:var(--bad);font-weight:700}
+  .go{color:var(--go)} .nogo{color:var(--nogo)} .unknown{color:var(--unk)}
+  details summary{cursor:pointer;color:var(--accent);font-size:12px}
+  .hgrid{border-collapse:collapse;margin:6px auto 0;min-width:0;width:auto;font-size:11px}
+  .hgrid td,.hgrid th{border:none;padding:1px 5px;background:transparent}
+  .hgrid th{color:var(--muted);font-weight:400}
+  .err{color:var(--bad)}
+  .note{color:var(--muted)}
+  .rip{font-weight:700;color:var(--bad)}
+  .ovt{min-width:0;width:auto;margin:4px 0 10px;font-size:12px}
+  .ovt td,.ovt th{padding:3px 10px}
+  .legend{margin-top:22px;color:var(--muted);font-size:12px}
+  a{color:var(--accent)}
 </style>
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Build 2026-11-03 · rain estimate = simple average of available sources.</span></p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Build 2026-11-03b · file saved <span id="saved"></span></span></p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
+  <label>Window <select id="winSel"></select></label>
   <button id="refresh">Refresh</button>
   <span class="status" id="status"></span>
 </div>
@@ -67,32 +69,34 @@ a{color:var(--accent)}
 "use strict";
 /* ------------------------------------------------------------------ config */
 const ET = "America/New_York";
-let WIN_START = 6, WIN_END = 10;            // inclusive hours; override with ?window=9-13 or beach_config.json
+let WIN_START = 6, WIN_END = 10;            // selected window (inclusive hours); ?window=9-13 sets the start-up choice
+const WINDOWS = [[6, 10], [9, 13], [10, 15]];   // all three are computed from one fetch
 const DAYLIGHT_LEAD_H = 0.75;               // start ~45 min before sunrise
 const RAIN_EVENT_H = 3, POP_LONG_BLOCK_H = 6;
 const BLEND_NWS = 0.5;                      // equal NWS / Open-Meteo
 const BATCH_SIZE = 2;                       // keep browser fetches bounded for All beaches
 let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 20, GO_RAIN_NOGO = 45, GO_SUN_MIN = 50;
 const PRIMARY = "Siesta Key";
-const pointCache = new Map();
+const pointCache = new Map();               // key -> Promise of the NWS /points reply
+const DEFAULT_RH = 70;                      // used only when humidity is missing (same as the Python)
 try {
   const q = new URLSearchParams(location.search).get("window"), m = q && /^(\d{1,2})-(\d{1,2})$/.exec(q);
   if (m && +m[1] < +m[2] && +m[2] <= 23) { WIN_START = +m[1]; WIN_END = +m[2]; }
 } catch (_) { /* not in a browser */ }
-
+if (!WINDOWS.some(w => w[0] === WIN_START && w[1] === WIN_END)) WINDOWS.push([WIN_START, WIN_END]);
 let BEACHES = [
-  {name:"Siesta Key", lat:27.265203, lon:-82.554562, link:"https://visitbeaches.org/beach/2/report/65939", proxy:true},
-  {name:"Lido Beach", lat:27.30228, lon:-82.571051, link:"https://visitbeaches.org/beach/4/report/65871"},
-  {name:"Blind Pass Beach", lat:26.9248, lon:-82.3929, link:"https://visitbeaches.org/beach/41/report/65659"},
-  {name:"Manasota Key Beach", lat:27.009963, lon:-82.412129, link:"https://visitbeaches.org/beach/3/report/74520"},
-  {name:"Nokomis Beach", lat:27.122796, lon:-82.469907, link:"https://visitbeaches.org/beach/5/report/73032"},
-  {name:"Manatee/Holmes Beach", lat:27.466252, lon:-82.699031, link:"https://visitbeaches.org/beach/27/report/66091"},
-  {name:"Bean Point (Anna Maria)", lat:27.537561, lon:-82.746226, link:"https://visitbeaches.org/beach/142/report/73169"},
-  {name:"Sunset Beach (Treasure Island)", lat:27.7617, lon:-82.7664, link:"https://visitbeaches.org/beach/34/report/74494", proxy:true},
-  {name:"Pass-a-Grille Beach (South)", lat:27.6822, lon:-82.7362, link:"https://visitbeaches.org/beach/36/report/74481", proxy:true},
-  {name:"Fort DeSoto", lat:27.623684, lon:-82.736539, link:"https://visitbeaches.org/beach/36/report/70582"},
-  {name:"Coquina", lat:27.447368, lon:-82.691881, link:"https://visitbeaches.org/beach/8/report/54287"},
-  {name:"Caspersen Beach", lat:27.056048, lon:-82.442835, link:"https://visitbeaches.org/beach/40/report/64770", proxy:true},
+  {name:"Siesta Key", onshore:250, lat:27.265203, lon:-82.554562, link:"https://visitbeaches.org/beach/2/report/65939", proxy:true},
+  {name:"Lido Beach", onshore:248, lat:27.30228, lon:-82.571051, link:"https://visitbeaches.org/beach/4/report/65871"},
+  {name:"Blind Pass Beach", onshore:255, lat:26.9248, lon:-82.3929, link:"https://visitbeaches.org/beach/41/report/65659"},
+  {name:"Manasota Key Beach", onshore:250, lat:27.009963, lon:-82.412129, link:"https://visitbeaches.org/beach/3/report/74520"},
+  {name:"Nokomis Beach", onshore:250, lat:27.122796, lon:-82.469907, link:"https://visitbeaches.org/beach/5/report/73032"},
+  {name:"Manatee/Holmes Beach", onshore:245, lat:27.466252, lon:-82.699031, link:"https://visitbeaches.org/beach/27/report/66091"},
+  {name:"Bean Point (Anna Maria)", onshore:300, lat:27.537561, lon:-82.746226, link:"https://visitbeaches.org/beach/142/report/73169"},
+  {name:"Sunset Beach (Treasure Island)", onshore:250, lat:27.7617, lon:-82.7664, link:"https://visitbeaches.org/beach/34/report/74494", proxy:true},
+  {name:"Pass-a-Grille Beach (South)", onshore:250, lat:27.6822, lon:-82.7362, link:"https://visitbeaches.org/beach/36/report/74481", proxy:true},
+  {name:"Fort DeSoto", onshore:260, lat:27.623684, lon:-82.736539, link:"https://visitbeaches.org/beach/36/report/70582"},
+  {name:"Coquina", onshore:248, lat:27.447368, lon:-82.691881, link:"https://visitbeaches.org/beach/8/report/54287"},
+  {name:"Caspersen Beach", onshore:245, lat:27.056048, lon:-82.442835, link:"https://visitbeaches.org/beach/40/report/64770", proxy:true},
 ];
 
 /* ----------------------------------------------------------------- helpers */
@@ -101,7 +105,6 @@ const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
 const cToF = c => Math.round(c * 9 / 5 + 32);
 const kphToMph = k => Math.round(k * 0.621371);
 const hourLabel = h => `${h % 12 || 12}${h < 12 ? "a" : "p"}`;
-
 const etFmt = new Intl.DateTimeFormat("en-CA", {timeZone: ET, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", hourCycle:"h23"});
 function etParts(d) {
   const p = Object.fromEntries(etFmt.formatToParts(d).map(x => [x.type, x.value]));
@@ -117,9 +120,22 @@ function etMs(date, hour) {   // absolute time of `hour`:00 Eastern on `date`
   for (const adj of [0, -3600000, 3600000]) { const p = etParts(new Date(ms + adj)); if (p.date === date && p.hour === hour) return ms + adj; }
   return ms;
 }
-function winLabel() {
+function winLabel(w = [WIN_START, WIN_END]) {
   const f = x => x % 12 || 12, m = x => x < 12 ? "am" : "pm";
-  return m(WIN_START) === m(WIN_END) ? `${f(WIN_START)}–${f(WIN_END)}${m(WIN_END)}` : `${f(WIN_START)}${m(WIN_START)}–${f(WIN_END)}${m(WIN_END)}`;
+  return m(w[0]) === m(w[1]) ? `${f(w[0])}–${f(w[1])}${m(w[1])}` : `${f(w[0])}${m(w[0])}–${f(w[1])}${m(w[1])}`;
+}
+const COMPASS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+const compass = d => COMPASS[Math.round(d / 22.5) % 16];
+function avgDir(degs) {   // circular mean of bearings (degrees)
+  const v = degs.filter(d => d != null && isFinite(d));
+  if (!v.length) return null;
+  const s = v.reduce((a, d) => a + Math.sin(d * Math.PI / 180), 0), c = v.reduce((a, d) => a + Math.cos(d * Math.PI / 180), 0);
+  return (Math.atan2(s, c) * 180 / Math.PI + 360) % 360;
+}
+function windTag(dir, onshore) {   // wind direction is where it blows FROM; onshore = bearing of the sea
+  if (dir == null) return "";
+  const diff = Math.abs(((dir - (onshore ?? 270) + 540) % 360) - 180);
+  return diff <= 45 ? "onshore" : diff <= 90 ? "cross-shore" : "offshore";
 }
 function daysOut(dateStr) {
   const t0 = Date.parse(etParts(new Date()).date + "T00:00:00Z");
@@ -159,7 +175,7 @@ function windChill(t, mph) {
 }
 function feelsLike(t, rh, wind) {
   if (t == null) return null;
-  const r = rh == null ? 50 : clamp(rh, 0, 100), w = wind == null ? 0 : Math.max(0, wind);
+  const r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100), w = wind == null ? 0 : Math.max(0, wind);
   if (t <= 50) return windChill(t, w);
   if (t >= 80) return Math.max(t, heatIndex(t, r));
   return t;
@@ -170,7 +186,7 @@ function durHours(s) {
   const d = /(\d+)D/.exec(s), h = /(\d+)H/.exec(s);
   return ((d ? +d[1] : 0) * 24 + (h ? +h[1] : 0)) || 1;
 }
-function expandField(values) {          // {date:{hour:value}}
+function expandField(values) {   // {date:{hour:value}}
   const out = {};
   for (const e of values || []) {
     if (!e.validTime) continue;
@@ -183,7 +199,7 @@ function expandField(values) {          // {date:{hour:value}}
   }
   return out;
 }
-function expandPop(values) {            // {date:{hour:[pct, blockHours, blockId]}}
+function expandPop(values) {     // {date:{hour:[pct, blockHours, blockId]}}
   const out = {};
   for (const e of values || []) {
     if (!e.validTime || e.value == null) continue;
@@ -226,37 +242,43 @@ const smoothedPeak = vals => {
 };
 
 /* --------------------------------------------------------------- fetchers */
-async function fetchNWSPoints(b) {
+function fetchNWSPoints(b) {   // one shared request per location; a failed lookup is retried next time
   const key = `${b.lat.toFixed(4)},${b.lon.toFixed(4)}`;
-  if (pointCache.has(key)) return pointCache.get(key);
-  const pts = await getJson(`https://api.weather.gov/points/${key}`);
-  pointCache.set(key, pts ?? null);
-  return pts ?? null;
+  if (!pointCache.has(key)) {
+    pointCache.set(key, getJson(`https://api.weather.gov/points/${key}`).then(pts => {
+      if (!pts) pointCache.delete(key);
+      return pts ?? null;
+    }));
+  }
+  return pointCache.get(key);
 }
 async function fetchOM(b) {
   const u = "https://api.open-meteo.com/v1/forecast?latitude=" + b.lat + "&longitude=" + b.lon +
-    "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,cloud_cover,wind_speed_10m" +
+    "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m" +
     "&daily=sunrise&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FNew_York&forecast_days=8";
   return getJson(u);
 }
-async function fetchOmModelRain(b, model, days = 2, matchHours = null) {
+async function fetchOmModelRain(b, model, days = 2) {   // raw hourly PoP: {date: {hour: pct}}
   const u = "https://api.open-meteo.com/v1/gfs?latitude=" + b.lat + "&longitude=" + b.lon +
     "&hourly=precipitation_probability&models=" + model + "&timezone=America%2FNew_York&forecast_days=" + days;
   const d = await getJson(u, 1), out = {};
   const t = d?.hourly?.time, p = d?.hourly?.precipitation_probability;
   if (!t || !p || t.length !== p.length) return out;
-  const g = {};
-  const isInWindow = matchHours ? (date, h) => matchHours(date, h) : (date, h) => h >= WIN_START && h <= WIN_END;
   t.forEach((ts, i) => {
-    const [date, hh] = ts.split("T"), h = +hh.slice(0, 2);
-    if (p[i] != null && isInWindow(date, h)) (g[date] ??= []).push(p[i]);
+    const [date, hh] = ts.split("T");
+    if (p[i] != null) (out[date] ??= {})[+hh.slice(0, 2)] = p[i];
   });
-  for (const [d2, v] of Object.entries(g)) { const pk = smoothedPeak(v); if (pk != null) out[d2] = pk; }
   return out;
 }
-async function fetchHRRR(b, matchHours = null) { return fetchOmModelRain(b, "gfs_hrrr", 2, matchHours); }
-async function fetchNBM(b, matchHours = null) { return fetchOmModelRain(b, "ncep_nbm_conus", 3, matchHours); }
-
+const fetchHRRR = b => fetchOmModelRain(b, "gfs_hrrr", 2);
+const fetchNBM = b => fetchOmModelRain(b, "ncep_nbm_conus", 3);
+function modelWindowRain(raw, date, win) {   // smoothed peak over the window's hours (not daylight-trimmed)
+  const day = raw?.[date];
+  if (!day) return null;
+  const v = [];
+  for (let h = win[0]; h <= win[1]; h++) if (day[h] != null) v.push(day[h]);
+  return smoothedPeak(v);
+}
 async function fetchNWSHourly(b) {
   const pts = await fetchNWSPoints(b);
   const url = pts?.properties?.forecastHourly;
@@ -271,6 +293,9 @@ async function fetchNWSHourly(b) {
     } catch (_) {}
   }
   return out;
+}
+function thunderInWindow(periods, date, hours) {
+  return (periods || []).some(p => { const ep = etParts(p.start); return ep.date === date && hours.includes(ep.hour) && /thunder/i.test(p.short || ""); });
 }
 function nwsHourlyWindowRain(periods, date, hours) {
   if (!periods?.length) return null;
@@ -309,7 +334,7 @@ async function fetchNWS(b) {
   if (!p) return null;
   const f = k => expandField(p[k]?.values);
   return {sky: f("skyCover"), wind: f("windSpeed"), temp: f("temperature"), rh: f("relativeHumidity"),
-          pop: expandPop(p.probabilityOfPrecipitation?.values)};
+          dir: f("windDirection"), pop: expandPop(p.probabilityOfPrecipitation?.values)};
 }
 const RT_URL = "https://gis.myfwc.com/mapping/rest/services/Open_Data/Recent_Harmful_Algal_Bloom__HAB__Events_2024_present/MapServer/7/query";
 async function fetchRedTide(b) {
@@ -363,7 +388,7 @@ async function fetchRipFromSrf() {
       while ((m = local.exec(block)) !== null) {
         const raw = m[1];
         const lvl = raw.toLowerCase() === "extreme" ? "High"
-          : raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+                  : raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
         if (lvl in RIP_ORDER) found.push(lvl);
       }
     }
@@ -384,10 +409,10 @@ async function fetchRip() {
 }
 
 /* ----------------------------------------------------- per-source summaries */
-function windowHours(sunriseHour) {
-  let start = WIN_START;
-  if (sunriseHour != null) start = Math.max(WIN_START, Math.min(Math.ceil(sunriseHour - DAYLIGHT_LEAD_H), WIN_END - 2));
-  const hrs = []; for (let h = start; h <= WIN_END; h++) hrs.push(h);
+function windowHours(sunriseHour, win = [WIN_START, WIN_END]) {
+  let start = win[0];
+  if (sunriseHour != null) start = Math.max(win[0], Math.min(Math.ceil(sunriseHour - DAYLIGHT_LEAD_H), win[1] - 2));
+  const hrs = []; for (let h = start; h <= win[1]; h++) hrs.push(h);
   return hrs;
 }
 function summarizeFeels(feelsH) {
@@ -397,7 +422,7 @@ function summarizeFeels(feelsH) {
 function nwsDay(nws, date, hours, prevDate) {
   if (!nws) return null;
   const pick = (field) => {
-    const o = {}; for (const h of hours) { const v = nws[field][date]?.[h]; if (v != null) o[h] = v; } return o;
+    const o = {}; for (const h of hours) { const v = nws[field]?.[date]?.[h]; if (v != null) o[h] = v; } return o;
   };
   const tC = pick("temp"), rh = pick("rh"), wk = pick("wind"), sky = Object.values(pick("sky"));
   if (!Object.keys(tC).length) return null;
@@ -408,7 +433,7 @@ function nwsDay(nws, date, hours, prevDate) {
   return {feelsH, feelsLow: s.low, feelsAvg: s.avg,
           sky: sky.length ? Math.round(avg(sky)) : null,
           rain: nwsWindowPop(nws.pop[date], hours, nws.pop[prevDate]),
-          wind: wv.length ? Math.max(...wv) : null};
+          wind: wv.length ? Math.max(...wv) : null, dirs: Object.values(pick("dir"))};
 }
 const CLOUD_MODELS = ["ecmwf_ifs025", "gfs_seamless", "icon_seamless", "gem_seamless"];
 async function fetchCloud(b) {   // mean total cloud cover across models: {date: {hour: pct}}
@@ -429,7 +454,8 @@ function omDay(om, date, hours, cloudMap = {}) {
   H.time.forEach((ts, i) => {
     const [d, hh] = ts.split("T"); const h = +hh.slice(0, 2);
     if (d === date && hours.includes(h)) rows.push({h, t: H.temperature_2m[i], rh: H.relative_humidity_2m[i],
-      rain: H.precipitation_probability[i], cloud: cloudMap[d]?.[h] ?? H.cloud_cover[i], wind: H.wind_speed_10m[i]});
+      rain: H.precipitation_probability[i], cloud: cloudMap[d]?.[h] ?? H.cloud_cover[i], wind: H.wind_speed_10m[i],
+      dir: H.wind_direction_10m?.[i] ?? null, mm: H.precipitation?.[i] ?? null});
   });
   const warm = rows.filter(r => r.t != null);
   if (!warm.length) return null;
@@ -438,8 +464,10 @@ function omDay(om, date, hours, cloudMap = {}) {
   const rain = rows.map(r => r.rain).filter(v => v != null), cl = rows.map(r => r.cloud).filter(v => v != null),
         w = rows.map(r => r.wind).filter(v => v != null);
   const sky = cl.length ? Math.round(avg(cl)) : null;
+  const mm = rows.map(r => r.mm).filter(v => v != null);
   return {feelsH, feelsLow: s.low, feelsAvg: s.avg, sky, sun: sky == null ? null : 100 - sky,
-          rain: smoothedPeak(rain), wind: w.length ? Math.round(Math.max(...w)) : null};
+          rain: smoothedPeak(rain), wind: w.length ? Math.round(Math.max(...w)) : null,
+          dirs: rows.map(r => r.dir).filter(v => v != null), precipIn: mm.length ? mm.reduce((a, x) => a + x, 0) / 25.4 : null};
 }
 
 /* --------------------------------------------------------------- blending */
@@ -459,9 +487,13 @@ function mergeHourly(n, o) {
 function resolve(n, o, dOut, extras = {}) {
   n = n || {}; o = o || {};
   const {hrrr = null, nbm = null, hourlyRain = null} = extras;
-  const srcs = dOut === 0 ? [n.rain, o.rain, hrrr, nbm, hourlyRain] : dOut === 1 ? [n.rain, o.rain, hrrr, nbm] : [n.rain, o.rain];
-  const valid = srcs.filter(x => x != null);
-  const rain = valid.length ? valid.reduce((a, x) => a + x, 0) / valid.length : null;
+  // Two independent families, averaged 50/50 (HRRR, NBM and the Open-Meteo default usually agree, so
+  // averaging every source would count one forecast several times). Same rule as the Python script.
+  const nwsFam = (dOut === 0 ? [n.rain, hourlyRain] : [n.rain]).filter(x => x != null);
+  const omFam = (dOut <= 1 ? [o.rain, hrrr, nbm] : [o.rain]).filter(x => x != null);
+  const fams = [nwsFam, omFam].filter(f => f.length).map(f => f.reduce((a, x) => a + x, 0) / f.length);
+  const rain = fams.length ? fams.reduce((a, x) => a + x, 0) / fams.length : null;
+  const valid = [...nwsFam, ...omFam];
   const rainSpread = valid.length ? {min: Math.min(...valid), max: Math.max(...valid), count: valid.length} : null;
   const sky = blend(n.sky, o.sky);
   const feelsHourly = mergeHourly(n.feelsH, o.feelsH);
@@ -497,56 +529,81 @@ function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
   return {label: "GO", why: "all clear"};
 }
 
+const CLOSE_FEELS = 2, CLOSE_WIND = 2, CLOSE_RAIN = 5, CLOSE_SUN = 5;   // margins for the gray "close call" note
+function closeCalls({avgFeels, feelsLow, wind, rain, sun}) {   // passes, but only just (display only)
+  const out = [];
+  if (avgFeels != null && avgFeels >= GO_AVG_FEELS_MIN && avgFeels < GO_AVG_FEELS_MIN + CLOSE_FEELS) out.push(`feels ${avgFeels.toFixed(0)}° (limit ${GO_AVG_FEELS_MIN}°)`);
+  if (feelsLow != null && feelsLow >= GO_FEELS_LOW_MIN && feelsLow < GO_FEELS_LOW_MIN + CLOSE_FEELS) out.push(`coldest hour ${feelsLow.toFixed(0)}° (limit ${GO_FEELS_LOW_MIN}°)`);
+  if (wind != null && wind >= GO_WIND_NOGO - CLOSE_WIND && wind < GO_WIND_NOGO) out.push(`wind ${wind.toFixed(0)} mph (limit ${GO_WIND_NOGO})`);
+  if (rain != null && rain >= GO_RAIN_NOGO - CLOSE_RAIN && rain < GO_RAIN_NOGO) out.push(`rain ${rain.toFixed(0)}% (limit ${GO_RAIN_NOGO}%)`);
+  if (sun != null && sun >= GO_SUN_MIN && sun < GO_SUN_MIN + CLOSE_SUN) out.push(`sun ${sun.toFixed(0)}% (limit ${GO_SUN_MIN}%)`);
+  return out;
+}
+
 /* ----------------------------------------------------------- beach pipeline */
-async function evaluateBeach(b, dates) {
+async function fetchBeachData(b) {
   const [om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
     fetchOM(b), fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
   ]);
+  return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap};
+}
+function computeRows(b, data, dates, win) {
+  const {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap} = data;
   const sunrise = {};
   (om?.daily?.time || []).forEach((d, i) => {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
   });
-  const rows = dates.map((date, i) => {
+  return dates.map(date => {
     const dOut = daysOut(date);
-    const hours = windowHours(sunrise[date] ?? null);
+    const hours = windowHours(sunrise[date] ?? null, win);
     const prev = etParts(new Date(Date.parse(date + "T12:00:00Z") - 86400000)).date;
     const n = nwsDay(nwsRaw, date, hours, prev), o = omDay(om, date, hours, cloudMap);
+    const hr = modelWindowRain(hrrr, date, win), nb = modelWindowRain(nbm, date, win);
     const hourlyRain = dOut === 0 ? nwsHourlyWindowRain(hourly, date, hours) : null;
-    const u = resolve(n, o, dOut, {hrrr: hrrr[date], nbm: nbm[date], hourlyRain});
+    const u = resolve(n, o, dOut, {hrrr: hr, nbm: nb, hourlyRain});
     const sun = u.sky == null ? null : Math.max(0, 100 - Math.round(u.sky));
     const rt_sev = rt.status === "detected" ? rt.severity : null;
     const imm = dOut === 0 ? precipImminent(hourly, date, hours) : {flag: false, why: ""};
     const passed = dOut === 0 && etParts(new Date()).hour > Math.max(...hours);
-    const d = decide({avgFeels: u.feelsAvg, wind: u.wind, rain: u.rain == null ? null : Math.round(u.rain), sun,
+    const rainCall = u.rain == null ? null : Math.round(u.rain);
+    const d = decide({avgFeels: u.feelsAvg, wind: u.wind, rain: rainCall, sun,
                       feelsLow: u.feelsLow, redTide: rt_sev, precipWhy: imm.flag ? imm.why : null});
     let coldH = null, coldV = Infinity;
     for (const [h, v] of Object.entries(u.feelsHourly)) if (v < coldV) { coldV = v; coldH = +h; }
-    return {date, hours, n, o, u, sun, rain: u.rain == null ? null : Math.round(u.rain),
-            hrrr: hrrr[date] ?? null, nbm: nbm[date] ?? null, hourlyRain,
-            coldH, ...(passed ? {label: "PASSED", why: "window has ended"} : d)};
+    const call = passed ? {label: "PASSED", why: "window has ended"} : d;
+    const wdir = avgDir([...(n?.dirs || []), ...(o?.dirs || [])]);
+    return {date, hours, winEnd: win[1], n, o, u, sun, rain: rainCall,
+            hrrr: hr, nbm: nb, hourlyRain, coldH,
+            close: call.label === "GO" ? closeCalls({avgFeels: u.feelsAvg, feelsLow: u.feelsLow, wind: u.wind, rain: rainCall, sun}) : [],
+            thunder: thunderInWindow(hourly, date, hours), precipIn: o?.precipIn ?? null,
+            windDir: wdir, windTag: windTag(wdir, b.onshore), ...call};
   });
+}
+async function evaluateBeach(b, dates, win = [WIN_START, WIN_END]) {
+  const data = await fetchBeachData(b);
+  const key = w => w.join("-"), byWindow = {};
+  for (const w of [win, ...WINDOWS.filter(x => key(x) !== key(win))]) byWindow[key(w)] = computeRows(b, data, dates, w);
   return {
     beach: b,
-    rows,
-    rt,
+    rows: byWindow[key(win)],
+    byWindow,
+    rt: data.rt,
     sources: {
-      nws: !!nwsRaw,
-      om: !!om,
-      hrrr: !!(hrrr && Object.keys(hrrr).length),
-      nbm: !!(nbm && Object.keys(nbm).length),
-      redtide: rt.status !== "unavailable",
+      nws: !!data.nwsRaw,
+      om: !!data.om,
+      hrrr: !!(data.hrrr && Object.keys(data.hrrr).length),
+      nbm: !!(data.nbm && Object.keys(data.nbm).length),
+      redtide: data.rt.status !== "unavailable",
     }
   };
 }
-
 
 /* ----------------------------------------------------------------------- UI */
 if (typeof document !== "undefined") {
   const esc = s => String(s).replace(/[&<>\"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
   const f = (v, u = "") => v == null ? "—" : v + u;
   const cls = l => l === "GO" ? "go" : l === "NO-GO" ? "nogo" : "unknown";
-  const stack = (used, n, o, u) => `${f(used, u)}<span class="small">NWS ${f(n, u)} · OM ${f(o, u)}</span>`;
-
+  const dayLabel = date => new Date(date + "T12:00:00").toLocaleDateString("en-US", {weekday: "short", month: "numeric", day: "numeric"});
   function hourlyGrid(r) {
     const src = [["Used", r.u.feelsHourly], ["NWS", r.n?.feelsH], ["OM", r.o?.feelsH]];
     const hrs = r.hours;
@@ -555,23 +612,26 @@ if (typeof document !== "undefined") {
     return `<table class="hgrid"><tr><th></th>${hrs.map(h => `<th>${hourLabel(h)}</th>`).join("")}<th>avg</th></tr>` +
       src.map(([name, o]) => `<tr><th>${name}</th>${hrs.map(h => cell(o?.[h])).join("")}${cell(avgOf(o))}</tr>`).join("") + "</table>";
   }
-
-  function render(res) {
+  function overview(res) {   // calls for every window side by side: the quickest way to pick a time
+    const keys = Object.keys(res.byWindow);
+    if (keys.length < 2) return "";
+    const head = keys.map(k => `<th>${winLabel(k.split("-").map(Number))}</th>`).join("");
+    const body = res.byWindow[keys[0]].map((r0, i) =>
+      `<tr><td>${esc(dayLabel(r0.date))}</td>` + keys.map(k => {
+        const r = res.byWindow[k][i];
+        return `<td class="call ${cls(r.label)}" title="${esc(r.why)}">${r.label}</td>`;
+      }).join("") + "</tr>").join("");
+    return `<p class="meta">Calls by window (hover a cell for the reasons):</p><table class="ovt"><thead><tr><th>Day</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  }
+  function render(res, winKey) {
     const b = res.beach, rt = res.rt, src = res.sources;
     const rtTxt = rt.status === "detected" ? `${rt.severity} (${Math.round(rt.count).toLocaleString()} cells/L)` : rt.status;
-    const sourceWarn = [
-      !src.nws && "NWS unavailable",
-      !src.om && "Open-Meteo unavailable",
-      !src.hrrr && "HRRR unavailable",
-      !src.nbm && "NBM unavailable",
-      !src.redtide && "Red tide unavailable",
-    ].filter(Boolean);
-    const warn = sourceWarn.length
-      ? `<p class="err">Source status: ${sourceWarn.join("; ")}. Fallbacks in use: any unavailable source is omitted from the rain average.</p>`
-      : "";
-    const rows = res.rows.map(r => {
-      const label = new Date(r.date + "T12:00:00").toLocaleDateString("en-US", {weekday: "short", month: "numeric", day: "numeric"});
-      const win = `${hourLabel(r.hours[0])}–${hourLabel(WIN_END)}`;
+    const sourceWarn = [!src.nws && "NWS unavailable", !src.om && "Open-Meteo unavailable", !src.redtide && "Red tide unavailable"].filter(Boolean);
+    const optional = [!src.hrrr && "HRRR", !src.nbm && "NBM"].filter(Boolean);
+    const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}. Any unavailable source is left out of the averages.</p>` : "") +
+                 (optional.length ? `<p class="meta">${optional.join(" and ")} not available right now; rain uses the other sources.</p>` : "");
+    const rows = (res.byWindow[winKey] || res.rows).map(r => {
+      const win = `${hourLabel(r.hours[0])}–${hourLabel(r.winEnd)}`;
       const coldCls = r.u.feelsLow != null && r.u.feelsLow < GO_FEELS_LOW_MIN ? "bad" : "";
       const avgCls = r.u.feelsAvg != null && r.u.feelsAvg < GO_AVG_FEELS_MIN ? "bad" : "";
       const sunCls = r.sun != null && r.sun < GO_SUN_MIN ? "bad" : "";
@@ -583,72 +643,106 @@ if (typeof document !== "undefined") {
         r.nbm != null ? `NBM ${r.nbm}%` : null,
         r.hourlyRain != null ? `Hrly ${r.hourlyRain}%` : null,
       ].filter(Boolean).map(s => " · " + s).join("");
+      const rainMore = [r.thunder ? "⚡ thunder possible" : null, r.precipIn != null ? `≈${r.precipIn.toFixed(2)} in (OM)` : null].filter(Boolean).join(" · ");
+      const closeNote = r.close?.length ? `<span class="small">close call: ${esc(r.close.join(", "))}</span>` : "";
+      const windDir = r.windDir == null ? "" : `<span class="small">from ${compass(r.windDir)} · ${r.windTag}</span>`;
       return `<tr>
-        <td>${esc(label)}<span class="small">${win}</span></td>
+        <td>${esc(dayLabel(r.date))}<span class="small">${win}</span></td>
         <td class="call ${cls(r.label)}">${r.label}</td>
-        <td class="${avgCls}">${f(r.u.feelsAvg, "°")}<details data-k="${esc(b.name)}|${r.date}"><summary>hourly</summary>${hourlyGrid(r)}</details></td>
+        <td class="${avgCls}">${f(r.u.feelsAvg, "°")}<details data-k="${esc(b.name)}|${r.date}|${winKey}"><summary>hourly</summary>${hourlyGrid(r)}</details></td>
         <td class="${coldCls}">${f(r.u.feelsLow, "°")}<span class="small">${r.coldH == null ? "" : "at " + hourLabel(r.coldH)}</span></td>
-        <td class="${rainCls}">${f(r.rain, "%")}<span class="small">NWS ${f(r.n?.rain, "%")} · OM ${f(r.o?.rain, "%")}${rainExtra}${rainSpread}</span></td>
+        <td class="${rainCls}">${f(r.rain, "%")}<span class="small">NWS ${f(r.n?.rain, "%")} · OM ${f(r.o?.rain, "%")}${rainExtra}${rainSpread}</span>${rainMore ? `<span class="small">${rainMore}</span>` : ""}</td>
         <td class="${sunCls}">${f(r.sun, "%")}<span class="small">NWS ${r.n?.sky == null ? "—" : 100 - r.n.sky + "%"} · OM ${f(r.o?.sun, "%")}</span></td>
-        <td class="${windCls}">${f(r.u.wind, " mph")}<span class="small">NWS ${f(r.n?.wind)} · OM ${f(r.o?.wind)}</span></td>
-        <td class="why">${esc(r.why)}</td></tr>`;
+        <td class="${windCls}">${f(r.u.wind, " mph")}<span class="small">NWS ${f(r.n?.wind)} · OM ${f(r.o?.wind)}</span>${windDir}</td>
+        <td class="why">${esc(r.why)}${closeNote}</td></tr>`;
     }).join("");
     const wq = b.proxy
       ? `uses a nearest-site proxy, so it can never decide the call`
       : `not checked in the browser (use the Python script to enforce it)`;
     return `<h2>${esc(b.name)}</h2>
       <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · regional signal, not beach-proof · Water quality ${wq} · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
-      ${warn}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th>
+      ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th>
       <th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
-  const sel = document.getElementById("beachSel"), out = document.getElementById("out"), status = document.getElementById("status");
-  function buildUI() {
-    document.getElementById("title").textContent = "Beach Go/No-Go · " + winLabel();
-    document.title = "Beach Go/No-Go · " + winLabel();
+  const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
+        out = document.getElementById("out"), status = document.getElementById("status");
+  let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
+  const CACHE = "beachForecast:v2:";
+  const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
+  const loadCache = choice => {
+    try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
+    return null;
+  };
+  const clock = ts => new Date(ts).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+  function ripHtml() {
+    const lvl = ripLevel ?? "unavailable";
+    return lvl === "High"
+      ? `<p class="rip">⚠ HIGH rip current risk today. Informational: it does not change the call, but swim with caution.</p>`
+      : `<p class="meta">Rip current today (informational, never decides): ${esc(lvl)}</p>`;
+  }
+  function renderAll() {
+    const openKeys = new Set([...document.querySelectorAll("details[open]")].map(d => d.dataset.k));   // keep expanded rows
+    const key = currentWin.join("-");
+    out.innerHTML = ripHtml() + results.map(r => render(r, key)).join("");
+    out.querySelectorAll("details").forEach(d => { if (openKeys.has(d.dataset.k)) d.open = true; });
+  }
+  function refreshLabels() {   // title, window picker and legend (safe to call when the window changes)
+    const label = winLabel(currentWin);
+    document.getElementById("title").textContent = "Beach Go/No-Go · " + label;
+    document.title = "Beach Go/No-Go · " + label;
+    winSel.innerHTML = WINDOWS.map(w => `<option value="${w.join("-")}">${winLabel(w)}</option>`).join("");
+    winSel.value = currentWin.join("-");
+    document.getElementById("legend").innerHTML = LEGEND;
+  }
+  function buildBeachList() {
     sel.innerHTML = BEACHES.map(b => `<option value="${esc(b.name)}">${esc(b.name)}${b.name === PRIMARY ? " (primary)" : ""}</option>`).join("") +
                     `<option value="__all">All beaches</option>`;
     sel.value = BEACHES.some(b => b.name === PRIMARY) ? PRIMARY : BEACHES[0].name;
-    document.getElementById("legend").innerHTML =
-      `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent (day 0, NWS hourly, inside the window) · red tide moderate/severe. ` +
-      `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>GO</b> otherwise. Red values break a rule. ` +
-      `Feels-like: one formula for both sources (wind chill ≤50°F, heat index ≥80°F, air temp between). ` +
-      `Rain estimate = simple average of every available source (day 0: NWS grid, OM, HRRR, NBM, NWS hourly; day 1: first four; day 2+: NWS, OM). ` +
-      `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud. ` +
-      `Wind is the window maximum. No weather score or crowd model on this page.`;
   }
-  buildUI();
-
-  let running = false;
+  const LEGEND =
+      `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent (day 0, NWS hourly, inside the window) · red tide moderate/severe. ` +
+      `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. Red values break a rule. ` +
+      `Feels-like: one formula for both sources (wind chill ≤50°F, heat index ≥80°F, air temp between). ` +
+      `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–1); days 2+ use NWS and OM. ` +
+      `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud. ` +
+      `Wind is the window maximum; direction is display only. Rain amount (OM) and "thunder possible" (NWS hourly) are shown but do not change the call. ` +
+      `All three windows come from the same data, so switching windows needs no reload.`;
   async function run() {
-    if (running) return;
+    if (running) { pending = true; return; }   // remember the latest request instead of dropping it
     running = true;
-    const openKeys = new Set([...document.querySelectorAll("details[open]")].map(d => d.dataset.k));   // keep expanded rows across refresh
     try {
       const dates = nextDates(7), choice = sel.value;
       const list = choice === "__all" ? BEACHES : [BEACHES.find(b => b.name === choice)];
-      out.innerHTML = ""; status.textContent = "Loading…";
-      let rip = null;
-      try { rip = await fetchRip(); } catch (_) { /* informational only */ }
-      out.insertAdjacentHTML("afterbegin", `<p class="meta">Rip current today (informational, never decides): ${esc(rip ?? "unavailable")}</p>`);
-
+      const cached = loadCache(choice);
+      if (cached) { results = cached.results; ripLevel = cached.rip; renderAll(); status.textContent = `Showing saved data from ${clock(cached.ts)}, refreshing…`; }
+      else { results = []; out.innerHTML = ""; status.textContent = "Loading…"; }
+      try { ripLevel = await fetchRip(); } catch (_) { /* informational only */ }
+      const fresh = [];
       for (let i = 0; i < list.length; i += BATCH_SIZE) {
         const batch = list.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(batch.map(async (b) => {
-          status.textContent = `Loading ${b.name} (${i + 1}/${list.length})…`;
-          return await evaluateBeach(b, dates);
-        }));
-        batchResults.forEach(res => out.insertAdjacentHTML("beforeend", render(res)));
+        status.textContent = `Loading ${batch.map(b => b.name).join(", ")} (${Math.min(i + BATCH_SIZE, list.length)}/${list.length})…`;
+        fresh.push(...await Promise.all(batch.map(b => evaluateBeach(b, dates, currentWin))));
+        if (!cached) { results = fresh.slice(); renderAll(); }
       }
-      out.querySelectorAll("details").forEach(d => { if (openKeys.has(d.dataset.k)) d.open = true; });
-      status.textContent = "Updated " + new Date().toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+      results = fresh; renderAll(); saveCache(choice);
+      status.textContent = "Updated " + clock(Date.now());
     } catch (e) {
       status.innerHTML = `<span class="err">Failed: ${esc(e.message)}</span>`;
     } finally {
-      running = false;   // always released, even if a fetch throws
+      running = false;
+      if (pending) { pending = false; run(); }
     }
   }
+  buildBeachList();
+  refreshLabels();
+  document.getElementById("saved").textContent = document.lastModified ? new Date(document.lastModified).toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "";
   sel.addEventListener("change", run);
+  winSel.addEventListener("change", () => {   // switching windows reuses the data already fetched
+    currentWin = winSel.value.split("-").map(Number); WIN_START = currentWin[0]; WIN_END = currentWin[1];
+    refreshLabels();
+    if (results.length && results.every(r => r.byWindow[currentWin.join("-")])) renderAll(); else run();
+  });
   document.getElementById("refresh").addEventListener("click", run);
   run();
   setInterval(() => { if (!document.hidden) run(); }, 30 * 60 * 1000);   // auto-refresh every 30 min
