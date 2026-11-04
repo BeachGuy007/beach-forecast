@@ -11,7 +11,7 @@
   wind, one feels-like formula, sun % = 100 - cloud cover, rain = average of two source
   families (NWS and Open-Meteo). NWS hourly can force a NO-GO when rain is imminent.
   Water quality and the crowd model are only in the Python reports.
--->
+ -->
 <style>
   :root{
     --bg:#ffffff; --fg:#111111; --muted:#5f6670; --line:#cfd4da; --head:#eef2f7; --card:#fafbfc;
@@ -55,7 +55,7 @@
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Build 2026-11-03b · file saved <span id="saved"></span></span></p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#8[...]
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
@@ -258,20 +258,22 @@ async function fetchOM(b) {
     "&daily=sunrise&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FNew_York&forecast_days=8";
   return getJson(u);
 }
-async function fetchOmModelRain(b, model, days = 2) {   // raw hourly PoP: {date: {hour: pct}}
+async function fetchOmModelRain(b, model, days = 2, hourMatcher = null) {   // raw hourly PoP: {date: {hour: pct}}
   const u = "https://api.open-meteo.com/v1/gfs?latitude=" + b.lat + "&longitude=" + b.lon +
     "&hourly=precipitation_probability&models=" + model + "&timezone=America%2FNew_York&forecast_days=" + days;
   const d = await getJson(u, 1), out = {};
   const t = d?.hourly?.time, p = d?.hourly?.precipitation_probability;
   if (!t || !p || t.length !== p.length) return out;
   t.forEach((ts, i) => {
-    const [date, hh] = ts.split("T");
-    if (p[i] != null) (out[date] ??= {})[+hh.slice(0, 2)] = p[i];
+    const [date, hh] = ts.split("T"), hour = +hh.slice(0, 2);
+    if (p[i] == null) return;
+    if (hourMatcher && !hourMatcher(date, hour)) return;
+    (out[date] ??= {})[hour] = p[i];
   });
   return out;
 }
-const fetchHRRR = b => fetchOmModelRain(b, "gfs_hrrr", 2);
-const fetchNBM = b => fetchOmModelRain(b, "ncep_nbm_conus", 3);
+const fetchHRRR = (b, hourMatcher = null) => fetchOmModelRain(b, "gfs_hrrr", 2, hourMatcher);
+const fetchNBM = (b, hourMatcher = null) => fetchOmModelRain(b, "ncep_nbm_conus", 3, hourMatcher);
 function modelWindowRain(raw, date, win) {   // smoothed peak over the window's hours (not daylight-trimmed)
   const day = raw?.[date];
   if (!day) return null;
@@ -436,7 +438,7 @@ function nwsDay(nws, date, hours, prevDate) {
           wind: wv.length ? Math.max(...wv) : null, dirs: Object.values(pick("dir"))};
 }
 const CLOUD_MODELS = ["ecmwf_ifs025", "gfs_seamless", "icon_seamless", "gem_seamless"];
-async function fetchCloud(b) {   // mean total cloud cover across models: {date: {hour: pct}}
+async function fetchCloud(b) {  // mean total cloud cover across models: {date: {hour: pct}}
   const d = await getJson("https://api.open-meteo.com/v1/forecast?latitude=" + b.lat + "&longitude=" + b.lon +
     "&hourly=cloud_cover&models=" + CLOUD_MODELS.join(",") + "&timezone=America%2FNew_York&forecast_days=8");
   const out = {}, H = d?.hourly;
@@ -543,7 +545,7 @@ function closeCalls({avgFeels, feelsLow, wind, rain, sun}) {   // passes, but on
 /* ----------------------------------------------------------- beach pipeline */
 async function fetchBeachData(b) {
   const [om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
-    fetchOM(b), fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
+    fetchOM(b), fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
   ]);
   return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap};
 }
@@ -701,8 +703,8 @@ if (typeof document !== "undefined") {
     sel.value = BEACHES.some(b => b.name === PRIMARY) ? PRIMARY : BEACHES[0].name;
   }
   const LEGEND =
-      `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent (day 0, NWS hourly, inside the window) · red tide moderate/severe. ` +
-      `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. Red values break a rule. ` +
+      `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
+      `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
       `Feels-like: one formula for both sources (wind chill ≤50°F, heat index ≥80°F, air temp between). ` +
       `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–1); days 2+ use NWS and OM. ` +
       `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud. ` +
