@@ -1,0 +1,10 @@
+# Keep the Python reports (they contain e-mail credentials) out of this public repo.
+*.py
+beach_forecast_core/
+.beach_cache/
+forecast_accuracy_*.jsonl
+model_tuning_*.json
+crowd_*_log.jsonl
+__pycache__/
+node_modules/
+.DS_Store
