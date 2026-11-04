@@ -45,6 +45,3 @@ npm test
 Runs `tests/dashboard.test.js` (Node 20+). The tests load the page's own script, so there is nothing to
 export. GitHub Actions runs them on every push.
 
-## Keeping secrets out
-The e-mail reports are Python scripts with credentials, so they are **not** part of this repo and
-`.gitignore` blocks `*.py` and `beach_forecast_core/`. Keep it that way, or use a private repository.
