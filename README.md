@@ -19,7 +19,7 @@ Open the GitHub Pages site on any phone or tablet.
 |---|---|
 | Average feels-like in the window | below 72°F |
 | Coldest hour (feels-like) | below 70°F |
-| Wind (window maximum) | 20 mph or more |
+| Wind (window maximum) | 15 mph or more |
 | Rain | 45% or more |
 | Sun | below 50% |
 | Rain imminent (today, NWS hourly, inside the window) | yes |
@@ -45,3 +45,6 @@ npm test
 Runs `tests/dashboard.test.js` (Node 20+). The tests load the page's own script, so there is nothing to
 export. GitHub Actions runs them on every push.
 
+## Keeping secrets out
+The e-mail reports are Python scripts with credentials, so they are **not** part of this repo and
+`.gitignore` blocks `*.py` and `beach_forecast_core/`. Keep it that way, or use a private repository.

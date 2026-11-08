@@ -56,7 +56,7 @@
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise).</p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Same rules as the Python report.</span></p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
@@ -76,7 +76,7 @@ const DAYLIGHT_LEAD_H = 0.75;               // start ~45 min before sunrise
 const RAIN_EVENT_H = 3, POP_LONG_BLOCK_H = 6;
 const BLEND_NWS = 0.5;                      // equal NWS / Open-Meteo
 const BATCH_SIZE = 2;                       // keep browser fetches bounded for All beaches
-let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 20, GO_RAIN_NOGO = 45, GO_SUN_MIN = 50;
+let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 15, GO_RAIN_NOGO = 45, GO_SUN_MIN = 50;
 const PRIMARY = "Siesta Key";
 const pointCache = new Map();               // key -> Promise of the NWS /points reply
 const DEFAULT_RH = 70;                      // used only when humidity is missing (same as the Python)
