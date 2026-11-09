@@ -56,7 +56,7 @@
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Feels-like is apparent temperature (humidity + wind); <code>?feels=nws</code> restores the old NWS convention. This differs from the Python report unless it is changed to match.</span></p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Feels-like is Steadman apparent temperature (humidity + wind); <code>?feels=nws</code> or <code>?feels=humid</code> switch styles; the Python report uses the same three styles and default.</span></p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
@@ -80,11 +80,12 @@ let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 15, GO_RAIN_NOG
 const PRIMARY = "Siesta Key";
 const pointCache = new Map();               // key -> Promise of the NWS /points reply
 const DEFAULT_RH = 70;                      // used only when humidity is missing (same as the Python)
-let FEELS_NWS = false;                      // ?feels=nws restores the old NWS convention (wind chill / heat index / air temp)
+let FEELS_STYLE = "steadman";               // ?feels=nws|humid|steadman; same three styles and default as the Python report
 try {
   const q = new URLSearchParams(location.search).get("window"), m = q && /^(\d{1,2})-(\d{1,2})$/.exec(q);
   if (m && +m[1] < +m[2] && +m[2] <= 23) { WIN_START = +m[1]; WIN_END = +m[2]; }
-  FEELS_NWS = new URLSearchParams(location.search).get("feels") === "nws";
+  { const fs = (new URLSearchParams(location.search).get("feels") || "").toLowerCase();
+    if (fs === "nws" || fs === "humid" || fs === "steadman") FEELS_STYLE = fs; }
 } catch (_) { /* not in a browser */ }
 if (!WINDOWS.some(w => w[0] === WIN_START && w[1] === WIN_END)) WINDOWS.push([WIN_START, WIN_END]);
 let BEACHES = [
@@ -175,10 +176,10 @@ function windChill(t, mph) {
   const v = Math.pow(mph, 0.16);
   return 35.74 + 0.6215*t - 35.75*v + 0.4275*t*v;
 }
-function feelsLikeNws(t, rh, wind) {          // old convention: wind chill <=50F, heat index >=80F, air temp between
+function feelsLikeNws(t, rh, wind, humid) {   // "nws": wind chill <=50F, heat index >=80F, air temp between; "humid": heat index from 60F up
   const r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100), w = wind == null ? 0 : Math.max(0, wind);
   if (t <= 50) return windChill(t, w);
-  if (t >= 80) return Math.max(t, heatIndex(t, r));
+  if (t >= 80 || (humid && t >= 60)) return Math.max(t, heatIndex(t, r));
   return t;
 }
 // Steadman apparent temperature (humidity + wind), the style Weather Underground uses.
@@ -191,7 +192,7 @@ function feelsLikeApparent(t, rh, wind) {     // t F, rh %, wind mph
 }
 function feelsLike(t, rh, wind) {
   if (t == null) return null;
-  return FEELS_NWS ? feelsLikeNws(t, rh, wind) : feelsLikeApparent(t, rh, wind);
+  return FEELS_STYLE === "steadman" ? feelsLikeApparent(t, rh, wind) : feelsLikeNws(t, rh, wind, FEELS_STYLE === "humid");
 }
 
 /* ----------------------------------------------------------- NWS parsing */
@@ -704,7 +705,7 @@ if (typeof document !== "undefined") {
   const LEGEND =
       `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
       `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
-      `Feels-like: one formula for both sources, ${FEELS_NWS ? "NWS convention (wind chill ≤50°F, heat index ≥80°F, air temp between)" : "apparent temperature from temperature, humidity and wind (add ?feels=nws for the old NWS convention)"}. ` +
+      `Feels-like: one formula for both sources, ${FEELS_STYLE === "nws" ? "NWS convention (wind chill ≤50°F, heat index ≥80°F, air temp between)" : FEELS_STYLE === "humid" ? "NWS convention plus humidity warmth from 60°F up" : "Steadman apparent temperature from temperature, humidity and wind (?feels=nws or ?feels=humid for the alternatives)"}. ` +
       `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–2; HRRR only reaches day 1); days 3+ use NWS and OM. ` +
       `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud; the cloud line under Sun shows the first→last hour of the window. ` +
       `Wind is the window maximum; direction is display only. Rain amount (OM) and "thunder possible" (NWS hourly) are shown but do not change the call. ` +
