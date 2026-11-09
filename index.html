@@ -56,7 +56,7 @@
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise).</p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Same rules as the Python report.</span></p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
@@ -158,32 +158,27 @@ async function getJson(url, tries = 2) {
   return null;
 }
 
-/* ----------------------------------------------------------- feels-like */
-// Weather Underground-like (default): its cool-morning numbers are the NWS wind-chill formula applied well above 50F,
-// and its warm, humid numbers track Steadman. Blend linearly between 62F (all wind chill) and 72F (all Steadman).
-// Fitted to 20 WU hourly values (mean error 0.55F, worst 1.2F); Steadman alone ran ~5F colder on cool, breezy mornings.
-// One feels-like formula for every source, computed from that source's own air temperature, humidity and wind
-// (same formula as the Python report):
-//   below 62F  NWS wind-chill formula, applied above its usual 50F ceiling (no effect at 3 mph or less)
-//   above 72F  Steadman apparent temperature (humidity warms, wind cools)
-//   62-72F     linear blend of the two, so there is never a jump.
-// Sun is not included. Checked against 20 Weather Underground hours (mean difference 0.6F, worst 1.2F).
-const FEELS_BLEND_LO = 62, FEELS_BLEND_HI = 72;
+/* ------------------------------------------------------- feels-like (NWS) */
+function heatIndex(t, rh) {
+  const simple = 0.5 * (t + 61 + (t - 68) * 1.2 + rh * 0.094);
+  if ((simple + t) / 2 < 80) return simple;
+  let hi = -42.379 + 2.04901523*t + 10.14333127*rh - 0.22475541*t*rh - 0.00683783*t*t
+         - 0.05481717*rh*rh + 0.00122874*t*t*rh + 0.00085282*t*rh*rh - 0.00000199*t*t*rh*rh;
+  if (rh < 13 && t >= 80 && t <= 112) hi -= ((13 - rh) / 4) * Math.sqrt((17 - Math.abs(t - 95)) / 17);
+  else if (rh > 85 && t >= 80 && t <= 87) hi += ((rh - 85) / 10) * ((87 - t) / 5);
+  return hi;
+}
 function windChill(t, mph) {
-  if (mph <= 3) return t;
+  if (t > 50 || mph <= 3) return t;
   const v = Math.pow(mph, 0.16);
   return 35.74 + 0.6215*t - 35.75*v + 0.4275*t*v;
 }
-function apparentTemp(t, rh, wind) {          // Steadman; t F, rh %, wind mph
-  const c = (t - 32) * 5 / 9, r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100);
-  const ws = (wind == null ? 0 : Math.max(0, wind)) * 0.44704;
-  const e = (r / 100) * 6.105 * Math.exp(17.27 * c / (237.7 + c));
-  return (c + 0.33 * e - 0.70 * ws - 4.0) * 9 / 5 + 32;
-}
 function feelsLike(t, rh, wind) {
   if (t == null) return null;
-  const w = wind == null ? 0 : Math.max(0, wind), k = clamp((t - FEELS_BLEND_LO) / (FEELS_BLEND_HI - FEELS_BLEND_LO), 0, 1);
-  return (1 - k) * windChill(t, w) + k * apparentTemp(t, rh, wind);
+  const r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100), w = wind == null ? 0 : Math.max(0, wind);
+  if (t <= 50) return windChill(t, w);
+  if (t >= 80) return Math.max(t, heatIndex(t, r));
+  return t;
 }
 
 /* ----------------------------------------------------------- NWS parsing */
@@ -434,14 +429,14 @@ function nwsDay(nws, date, hours, prevDate) {
   const pick = (field) => {
     const o = {}; for (const h of hours) { const v = nws[field]?.[date]?.[h]; if (v != null) o[h] = v; } return o;
   };
-  const tC = pick("temp"), rh = pick("rh"), wk = pick("wind"), skyH = pick("sky"), sky = Object.values(skyH);
+  const tC = pick("temp"), rh = pick("rh"), wk = pick("wind"), sky = Object.values(pick("sky"));
   if (!Object.keys(tC).length) return null;
   const wind = {}; for (const [h, v] of Object.entries(wk)) wind[h] = kphToMph(v);
   const feelsH = {};
   for (const [h, c] of Object.entries(tC)) feelsH[h] = Math.round(feelsLike(cToF(c), rh[h], wind[h]));
   const s = summarizeFeels(feelsH), wv = Object.values(wind);
   return {feelsH, feelsLow: s.low, feelsAvg: s.avg,
-          sky: sky.length ? Math.round(avg(sky)) : null, skyH,
+          sky: sky.length ? Math.round(avg(sky)) : null,
           rain: nwsWindowPop(nws.pop[date], hours, nws.pop[prevDate]),
           wind: wv.length ? Math.max(...wv) : null, dirs: Object.values(pick("dir"))};
 }
@@ -475,8 +470,7 @@ function omDay(om, date, hours, cloudMap = {}) {
         w = rows.map(r => r.wind).filter(v => v != null);
   const sky = cl.length ? Math.round(avg(cl)) : null;
   const mm = rows.map(r => r.mm).filter(v => v != null);
-  const cloudH = {}; for (const r of rows) if (r.cloud != null) cloudH[r.h] = Math.round(r.cloud);
-  return {feelsH, feelsLow: s.low, feelsAvg: s.avg, sky, cloudH, sun: sky == null ? null : 100 - sky,
+  return {feelsH, feelsLow: s.low, feelsAvg: s.avg, sky, sun: sky == null ? null : 100 - sky,
           rain: smoothedPeak(rain), wind: w.length ? Math.round(Math.max(...w)) : null,
           dirs: rows.map(r => r.dir).filter(v => v != null), precipIn: mm.length ? mm.reduce((a, x) => a + x, 0) / 25.4 : null};
 }
@@ -499,7 +493,7 @@ function resolve(n, o, dOut, extras = {}) {
   n = n || {}; o = o || {};
   const {hrrr = null, nbm = null, hourlyRain = null} = extras;
   const nwsFam = (dOut === 0 ? [n.rain, hourlyRain] : [n.rain]).filter(x => x != null);
-  const omFam = (dOut <= 2 ? [o.rain, hrrr, nbm] : [o.rain]).filter(x => x != null);
+  const omFam = (dOut <= 1 ? [o.rain, hrrr, nbm] : [o.rain]).filter(x => x != null);
   const fams = [nwsFam, omFam].filter(f => f.length).map(f => f.reduce((a, x) => a + x, 0) / f.length);
   const rain = fams.length ? fams.reduce((a, x) => a + x, 0) / fams.length : null;
   const valid = [...nwsFam, ...omFam];
@@ -579,20 +573,15 @@ function computeRows(b, data, dates, win) {
     for (const [h, v] of Object.entries(u.feelsHourly)) if (v < coldV) { coldV = v; coldH = +h; }
     const call = passed ? {label: "PASSED", why: "window has ended"} : d;
     const wdir = avgDir([...(n?.dirs || []), ...(o?.dirs || [])]);
-    const ch = mergeHourly(n?.skyH, o?.cloudH), h0 = hours[0], h1 = hours[hours.length - 1];
-    const cloudTrend = hours.length > 1 && ch[h0] != null && ch[h1] != null ? {a: ch[h0], b: ch[h1], h0, h1} : null;
     return {date, hours, winEnd: win[1], n, o, u, sun, rain: rainCall,
             hrrr: hr, nbm: nb, hourlyRain, coldH,
             close: call.label === "GO" ? closeCalls({avgFeels: u.feelsAvg, feelsLow: u.feelsLow, wind: u.wind, rain: rainCall, sun}) : [],
             thunder: thunderInWindow(hourly, date, hours), precipIn: o?.precipIn ?? null,
-            windDir: wdir, windTag: windTag(wdir, b.onshore), cloudTrend, ...call};
+            windDir: wdir, windTag: windTag(wdir, b.onshore), ...call};
   });
 }
 async function evaluateBeach(b, dates, win = [WIN_START, WIN_END]) {
   const data = await fetchBeachData(b);
-  return buildResult(b, data, dates, win);
-}
-function buildResult(b, data, dates, win) {
   const key = w => w.join("-"), byWindow = {};
   for (const w of [win, ...WINDOWS.filter(x => key(x) !== key(win))]) byWindow[key(w)] = computeRows(b, data, dates, w);
   return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable"}};
@@ -643,7 +632,6 @@ if (typeof document !== "undefined") {
         r.hourlyRain != null ? `Hrly ${r.hourlyRain}%` : null].filter(Boolean).map(s => " · " + s).join("");
       const rainMore = [r.thunder ? "⚡ thunder possible" : null, r.precipIn != null ? `≈${r.precipIn.toFixed(2)} in (OM)` : null].filter(Boolean).join(" · ");
       const closeNote = r.close?.length ? `<span class="small">close call: ${esc(r.close.join(", "))}</span>` : "";
-      const cloudTrend = r.cloudTrend ? `<span class="small">cloud ${r.cloudTrend.a}%→${r.cloudTrend.b}% (${hourLabel(r.cloudTrend.h0)}→${hourLabel(r.cloudTrend.h1)})</span>` : "";
       const windDir = r.windDir == null ? "" : `<span class="small">from ${compass(r.windDir)} · ${r.windTag}</span>`;
       return `<tr>
         <td>${esc(dayLabel(r.date))}<span class="small">${win}</span></td>
@@ -651,7 +639,7 @@ if (typeof document !== "undefined") {
         <td class="${avgCls}">${f(r.u.feelsAvg, "°")}<details data-k="${esc(b.name)}|${r.date}|${winKey}"><summary>hourly</summary>${hourlyGrid(r)}</details></td>
         <td class="${coldCls}">${f(r.u.feelsLow, "°")}<span class="small">${r.coldH == null ? "" : "at " + hourLabel(r.coldH)}</span></td>
         <td class="${rainCls}">${f(r.rain, "%")}<span class="small">NWS ${f(r.n?.rain, "%")} · OM ${f(r.o?.rain, "%")}${rainExtra}${rainSpread}</span>${rainMore ? `<span class="small">${rainMore}</span>` : ""}</td>
-        <td class="${sunCls}">${f(r.sun, "%")}<span class="small">NWS ${r.n?.sky == null ? "—" : 100 - r.n.sky + "%"} · OM ${f(r.o?.sun, "%")}</span>${cloudTrend}</td>
+        <td class="${sunCls}">${f(r.sun, "%")}<span class="small">NWS ${r.n?.sky == null ? "—" : 100 - r.n.sky + "%"} · OM ${f(r.o?.sun, "%")}</span></td>
         <td class="${windCls}">${f(r.u.wind, " mph")}<span class="small">NWS ${f(r.n?.wind)} · OM ${f(r.o?.wind)}</span>${windDir}</td>
         <td class="why">${esc(r.why)}${closeNote}</td></tr>`;
     }).join("");
@@ -664,7 +652,7 @@ if (typeof document !== "undefined") {
   const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v4:";
+  const CACHE = "beachForecast:v2:";
   const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
     try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
@@ -689,19 +677,19 @@ if (typeof document !== "undefined") {
     document.title = "Beach Go/No-Go · " + label;
     winSel.innerHTML = WINDOWS.map(w => `<option value="${w.join("-")}">${winLabel(w)}</option>`).join("");
     winSel.value = currentWin.join("-");
-    document.getElementById("legend").innerHTML = legendHtml();
+    document.getElementById("legend").innerHTML = LEGEND;
   }
   function buildBeachList() {
     sel.innerHTML = BEACHES.map(b => `<option value="${esc(b.name)}">${esc(b.name)}${b.name === PRIMARY ? " (primary)" : ""}</option>`).join("") +
                     `<option value="__all">All beaches</option>`;
     sel.value = BEACHES.some(b => b.name === PRIMARY) ? PRIMARY : BEACHES[0].name;
   }
-  const legendHtml = () =>
+  const LEGEND =
       `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
       `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
-      `Feels-like: one formula for both sources, from each source\u2019s own temperature, humidity and wind: wind-chill formula below 62°F, Steadman apparent temperature above 72°F, blended in between (sun is not included). ` +
-      `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–2; HRRR only reaches day 1); days 3+ use NWS and OM. ` +
-      `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud; the cloud line under Sun shows the first→last hour of the window. ` +
+      `Feels-like: one formula for both sources (wind chill ≤50°F, heat index ≥80°F, air temp between). ` +
+      `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–1); days 2+ use NWS and OM. ` +
+      `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud. ` +
       `Wind is the window maximum; direction is display only. Rain amount (OM) and "thunder possible" (NWS hourly) are shown but do not change the call. ` +
       `All three windows come from the same data, so switching windows needs no reload.`;
   async function run() {
