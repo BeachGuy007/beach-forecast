@@ -56,10 +56,11 @@
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window. <span style="color:#888">Feels-like is Steadman apparent temperature (humidity + wind); <code>?feels=nws</code> or <code>?feels=humid</code> switch styles; the Python report uses the same three styles and default.</span></p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window.</p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
+  <label>Feels-like <select id="feelsSel"></select></label>
   <button id="refresh">Refresh</button>
   <span class="status" id="status"></span>
 </div>
@@ -597,8 +598,13 @@ function computeRows(b, data, dates, win) {
             windDir: wdir, windTag: windTag(wdir, b.onshore), cloudTrend, ...call};
   });
 }
+const RAW = new Map();   // beach name -> {data, dates}; lets the Feels-like selector recompute without refetching
 async function evaluateBeach(b, dates, win = [WIN_START, WIN_END]) {
   const data = await fetchBeachData(b);
+  RAW.set(b.name, {data, dates});
+  return buildResult(b, data, dates, win);
+}
+function buildResult(b, data, dates, win) {
   const key = w => w.join("-"), byWindow = {};
   for (const w of [win, ...WINDOWS.filter(x => key(x) !== key(win))]) byWindow[key(w)] = computeRows(b, data, dates, w);
   return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable"}};
@@ -667,13 +673,13 @@ if (typeof document !== "undefined") {
       ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th><th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
-  const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
+  const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"), feelsSel = document.getElementById("feelsSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
   const CACHE = "beachForecast:v3:";
-  const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
+  const saveCache = choice => { try { localStorage.setItem(CACHE + FEELS_STYLE + ":" + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
-    try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
+    try { const c = JSON.parse(localStorage.getItem(CACHE + FEELS_STYLE + ":" + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
     return null;
   };
   const clock = ts => new Date(ts).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
@@ -695,14 +701,14 @@ if (typeof document !== "undefined") {
     document.title = "Beach Go/No-Go · " + label;
     winSel.innerHTML = WINDOWS.map(w => `<option value="${w.join("-")}">${winLabel(w)}</option>`).join("");
     winSel.value = currentWin.join("-");
-    document.getElementById("legend").innerHTML = LEGEND;
+    document.getElementById("legend").innerHTML = legendHtml();
   }
   function buildBeachList() {
     sel.innerHTML = BEACHES.map(b => `<option value="${esc(b.name)}">${esc(b.name)}${b.name === PRIMARY ? " (primary)" : ""}</option>`).join("") +
                     `<option value="__all">All beaches</option>`;
     sel.value = BEACHES.some(b => b.name === PRIMARY) ? PRIMARY : BEACHES[0].name;
   }
-  const LEGEND =
+  const legendHtml = () =>
       `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
       `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
       `Feels-like: one formula for both sources, ${FEELS_STYLE === "nws" ? "NWS convention (wind chill ≤50°F, heat index ≥80°F, air temp between)" : FEELS_STYLE === "humid" ? "NWS convention plus humidity warmth from 60°F up" : "Steadman apparent temperature from temperature, humidity and wind (?feels=nws or ?feels=humid for the alternatives)"}. ` +
@@ -736,13 +742,29 @@ if (typeof document !== "undefined") {
       if (pending) { pending = false; run(); }
     }
   }
+  const FEELS_OPTIONS = [["steadman", "Steadman (default)", "Humidity and wind both count at every temperature; closest to Weather Underground"],
+                         ["humid", "Humid", "Air temp, plus humidity warmth from 60°F up; heat index at 80°F and above"],
+                         ["nws", "NWS", "Air temp between 50 and 80°F; wind chill below, heat index above"]];
+  function buildFeelsList() {
+    feelsSel.innerHTML = FEELS_OPTIONS.map(([v, t, d]) => `<option value="${v}" title="${esc(d)}">${t}</option>`).join("");
+    feelsSel.value = FEELS_STYLE;
+  }
   buildBeachList();
+  buildFeelsList();
   refreshLabels();
   sel.addEventListener("change", run);
   winSel.addEventListener("change", () => {
     currentWin = winSel.value.split("-").map(Number); WIN_START = currentWin[0]; WIN_END = currentWin[1];
     refreshLabels();
     if (results.length && results.every(r => r.byWindow[currentWin.join("-")])) renderAll(); else run();
+  });
+  feelsSel.addEventListener("change", () => {
+    FEELS_STYLE = feelsSel.value; refreshLabels();
+    const raws = results.map(r => RAW.get(r.beach.name));
+    if (results.length && raws.every(Boolean)) {   // data already in memory: recompute instantly
+      results = results.map((r, i) => buildResult(r.beach, raws[i].data, raws[i].dates, currentWin));
+      renderAll(); saveCache(sel.value);
+    } else run();
   });
   document.getElementById("refresh").addEventListener("click", run);
   run();
