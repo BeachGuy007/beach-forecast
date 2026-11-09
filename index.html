@@ -56,7 +56,7 @@
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise). Use <code>?window=9-13</code> for the 9am–1pm window.</p>
+<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise).</p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
@@ -81,12 +81,12 @@ let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 15, GO_RAIN_NOG
 const PRIMARY = "Siesta Key";
 const pointCache = new Map();               // key -> Promise of the NWS /points reply
 const DEFAULT_RH = 70;                      // used only when humidity is missing (same as the Python)
-let FEELS_STYLE = "steadman";               // ?feels=nws|humid|steadman; same three styles and default as the Python report
+let FEELS_STYLE = "wu";                     // wu | steadman | humid | nws; same four styles and default as the Python report
 try {
   const q = new URLSearchParams(location.search).get("window"), m = q && /^(\d{1,2})-(\d{1,2})$/.exec(q);
   if (m && +m[1] < +m[2] && +m[2] <= 23) { WIN_START = +m[1]; WIN_END = +m[2]; }
   { const fs = (new URLSearchParams(location.search).get("feels") || "").toLowerCase();
-    if (fs === "nws" || fs === "humid" || fs === "steadman") FEELS_STYLE = fs; }
+    if (fs === "wu" || fs === "nws" || fs === "humid" || fs === "steadman") FEELS_STYLE = fs; }
 } catch (_) { /* not in a browser */ }
 if (!WINDOWS.some(w => w[0] === WIN_START && w[1] === WIN_END)) WINDOWS.push([WIN_START, WIN_END]);
 let BEACHES = [
@@ -177,14 +177,27 @@ function windChill(t, mph) {
   const v = Math.pow(mph, 0.16);
   return 35.74 + 0.6215*t - 35.75*v + 0.4275*t*v;
 }
+// Weather Underground-like (default): its cool-morning numbers are the NWS wind-chill formula applied well above 50F,
+// and its warm, humid numbers track Steadman. Blend linearly between 62F (all wind chill) and 72F (all Steadman).
+// Fitted to 20 WU hourly values (mean error 0.55F, worst 1.2F); Steadman alone ran ~5F colder on cool, breezy mornings.
+const WU_BLEND_LO = 62, WU_BLEND_HI = 72;
+function windChillAny(t, mph) {              // wind-chill formula with no 50F ceiling
+  if (mph <= 3) return t;
+  const v = Math.pow(mph, 0.16);
+  return 35.74 + 0.6215*t - 35.75*v + 0.4275*t*v;
+}
+function feelsLikeWu(t, rh, wind) {
+  const w = wind == null ? 0 : Math.max(0, wind), k = clamp((t - WU_BLEND_LO) / (WU_BLEND_HI - WU_BLEND_LO), 0, 1);
+  return (1 - k) * windChillAny(t, w) + k * feelsLikeApparent(t, rh, wind);
+}
 function feelsLikeNws(t, rh, wind, humid) {   // "nws": wind chill <=50F, heat index >=80F, air temp between; "humid": heat index from 60F up
   const r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100), w = wind == null ? 0 : Math.max(0, wind);
   if (t <= 50) return windChill(t, w);
   if (t >= 80 || (humid && t >= 60)) return Math.max(t, heatIndex(t, r));
   return t;
 }
-// Steadman apparent temperature (humidity + wind), the style Weather Underground uses.
-// Runs above air temp on humid mornings and below it on dry/breezy ones.
+// Steadman apparent temperature (humidity + wind). Runs above air temp on humid mornings and well below it
+// on cool, breezy ones (about 5F colder than Weather Underground then).
 function feelsLikeApparent(t, rh, wind) {     // t F, rh %, wind mph
   const c = (t - 32) * 5 / 9, r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100);
   const ws = (wind == null ? 0 : Math.max(0, wind)) * 0.44704;
@@ -193,7 +206,9 @@ function feelsLikeApparent(t, rh, wind) {     // t F, rh %, wind mph
 }
 function feelsLike(t, rh, wind) {
   if (t == null) return null;
-  return FEELS_STYLE === "steadman" ? feelsLikeApparent(t, rh, wind) : feelsLikeNws(t, rh, wind, FEELS_STYLE === "humid");
+  if (FEELS_STYLE === "wu") return feelsLikeWu(t, rh, wind);
+  if (FEELS_STYLE === "steadman") return feelsLikeApparent(t, rh, wind);
+  return feelsLikeNws(t, rh, wind, FEELS_STYLE === "humid");
 }
 
 /* ----------------------------------------------------------- NWS parsing */
@@ -711,7 +726,7 @@ if (typeof document !== "undefined") {
   const legendHtml = () =>
       `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
       `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
-      `Feels-like: one formula for both sources, ${FEELS_STYLE === "nws" ? "NWS convention (wind chill ≤50°F, heat index ≥80°F, air temp between)" : FEELS_STYLE === "humid" ? "NWS convention plus humidity warmth from 60°F up" : "Steadman apparent temperature from temperature, humidity and wind (?feels=nws or ?feels=humid for the alternatives)"}. ` +
+      `Feels-like: one formula for both sources, ${FEELS_STYLE === "nws" ? "NWS convention (wind chill ≤50°F, heat index ≥80°F, air temp between)" : FEELS_STYLE === "humid" ? "NWS convention plus humidity warmth from 60°F up" : FEELS_STYLE === "steadman" ? "Steadman apparent temperature from temperature, humidity and wind" : "Weather Underground-like: wind-chill formula below 62°F, Steadman apparent temperature above 72°F, blended in between"}. ` +
       `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–2; HRRR only reaches day 1); days 3+ use NWS and OM. ` +
       `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud; the cloud line under Sun shows the first→last hour of the window. ` +
       `Wind is the window maximum; direction is display only. Rain amount (OM) and "thunder possible" (NWS hourly) are shown but do not change the call. ` +
@@ -742,7 +757,8 @@ if (typeof document !== "undefined") {
       if (pending) { pending = false; run(); }
     }
   }
-  const FEELS_OPTIONS = [["steadman", "Steadman (default)", "Humidity and wind both count at every temperature; closest to Weather Underground"],
+  const FEELS_OPTIONS = [["wu", "WU-like (default)", "Wind chill when cool, humidity and wind when warm; fitted to Weather Underground"],
+                         ["steadman", "Steadman", "Humidity and wind count at every temperature; runs cold on cool, breezy mornings"],
                          ["humid", "Humid", "Air temp, plus humidity warmth from 60°F up; heat index at 80°F and above"],
                          ["nws", "NWS", "Air temp between 50 and 80°F; wind chill below, heat index above"]];
   function buildFeelsList() {
