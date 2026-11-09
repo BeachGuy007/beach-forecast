@@ -60,7 +60,6 @@
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
-  <label>Feels-like <select id="feelsSel"></select></label>
   <button id="refresh">Refresh</button>
   <span class="status" id="status"></span>
 </div>
@@ -81,12 +80,9 @@ let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 15, GO_RAIN_NOG
 const PRIMARY = "Siesta Key";
 const pointCache = new Map();               // key -> Promise of the NWS /points reply
 const DEFAULT_RH = 70;                      // used only when humidity is missing (same as the Python)
-let FEELS_STYLE = "wu";                     // wu | steadman | humid | nws; same four styles and default as the Python report
 try {
   const q = new URLSearchParams(location.search).get("window"), m = q && /^(\d{1,2})-(\d{1,2})$/.exec(q);
   if (m && +m[1] < +m[2] && +m[2] <= 23) { WIN_START = +m[1]; WIN_END = +m[2]; }
-  { const fs = (new URLSearchParams(location.search).get("feels") || "").toLowerCase();
-    if (fs === "wu" || fs === "nws" || fs === "humid" || fs === "steadman") FEELS_STYLE = fs; }
 } catch (_) { /* not in a browser */ }
 if (!WINDOWS.some(w => w[0] === WIN_START && w[1] === WIN_END)) WINDOWS.push([WIN_START, WIN_END]);
 let BEACHES = [
@@ -163,42 +159,22 @@ async function getJson(url, tries = 2) {
 }
 
 /* ----------------------------------------------------------- feels-like */
-function heatIndex(t, rh) {
-  const simple = 0.5 * (t + 61 + (t - 68) * 1.2 + rh * 0.094);
-  if ((simple + t) / 2 < 80) return simple;
-  let hi = -42.379 + 2.04901523*t + 10.14333127*rh - 0.22475541*t*rh - 0.00683783*t*t
-         - 0.05481717*rh*rh + 0.00122874*t*t*rh + 0.00085282*t*rh*rh - 0.00000199*t*t*rh*rh;
-  if (rh < 13 && t >= 80 && t <= 112) hi -= ((13 - rh) / 4) * Math.sqrt((17 - Math.abs(t - 95)) / 17);
-  else if (rh > 85 && t >= 80 && t <= 87) hi += ((rh - 85) / 10) * ((87 - t) / 5);
-  return hi;
-}
-function windChill(t, mph) {
-  if (t > 50 || mph <= 3) return t;
-  const v = Math.pow(mph, 0.16);
-  return 35.74 + 0.6215*t - 35.75*v + 0.4275*t*v;
-}
 // Weather Underground-like (default): its cool-morning numbers are the NWS wind-chill formula applied well above 50F,
 // and its warm, humid numbers track Steadman. Blend linearly between 62F (all wind chill) and 72F (all Steadman).
 // Fitted to 20 WU hourly values (mean error 0.55F, worst 1.2F); Steadman alone ran ~5F colder on cool, breezy mornings.
-const WU_BLEND_LO = 62, WU_BLEND_HI = 72;
-function windChillAny(t, mph) {              // wind-chill formula with no 50F ceiling
+// One feels-like formula for every source, computed from that source's own air temperature, humidity and wind
+// (same formula as the Python report):
+//   below 62F  NWS wind-chill formula, applied above its usual 50F ceiling (no effect at 3 mph or less)
+//   above 72F  Steadman apparent temperature (humidity warms, wind cools)
+//   62-72F     linear blend of the two, so there is never a jump.
+// Sun is not included. Checked against 20 Weather Underground hours (mean difference 0.6F, worst 1.2F).
+const FEELS_BLEND_LO = 62, FEELS_BLEND_HI = 72;
+function windChill(t, mph) {
   if (mph <= 3) return t;
   const v = Math.pow(mph, 0.16);
   return 35.74 + 0.6215*t - 35.75*v + 0.4275*t*v;
 }
-function feelsLikeWu(t, rh, wind) {
-  const w = wind == null ? 0 : Math.max(0, wind), k = clamp((t - WU_BLEND_LO) / (WU_BLEND_HI - WU_BLEND_LO), 0, 1);
-  return (1 - k) * windChillAny(t, w) + k * feelsLikeApparent(t, rh, wind);
-}
-function feelsLikeNws(t, rh, wind, humid) {   // "nws": wind chill <=50F, heat index >=80F, air temp between; "humid": heat index from 60F up
-  const r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100), w = wind == null ? 0 : Math.max(0, wind);
-  if (t <= 50) return windChill(t, w);
-  if (t >= 80 || (humid && t >= 60)) return Math.max(t, heatIndex(t, r));
-  return t;
-}
-// Steadman apparent temperature (humidity + wind). Runs above air temp on humid mornings and well below it
-// on cool, breezy ones (about 5F colder than Weather Underground then).
-function feelsLikeApparent(t, rh, wind) {     // t F, rh %, wind mph
+function apparentTemp(t, rh, wind) {          // Steadman; t F, rh %, wind mph
   const c = (t - 32) * 5 / 9, r = rh == null ? DEFAULT_RH : clamp(rh, 0, 100);
   const ws = (wind == null ? 0 : Math.max(0, wind)) * 0.44704;
   const e = (r / 100) * 6.105 * Math.exp(17.27 * c / (237.7 + c));
@@ -206,9 +182,8 @@ function feelsLikeApparent(t, rh, wind) {     // t F, rh %, wind mph
 }
 function feelsLike(t, rh, wind) {
   if (t == null) return null;
-  if (FEELS_STYLE === "wu") return feelsLikeWu(t, rh, wind);
-  if (FEELS_STYLE === "steadman") return feelsLikeApparent(t, rh, wind);
-  return feelsLikeNws(t, rh, wind, FEELS_STYLE === "humid");
+  const w = wind == null ? 0 : Math.max(0, wind), k = clamp((t - FEELS_BLEND_LO) / (FEELS_BLEND_HI - FEELS_BLEND_LO), 0, 1);
+  return (1 - k) * windChill(t, w) + k * apparentTemp(t, rh, wind);
 }
 
 /* ----------------------------------------------------------- NWS parsing */
@@ -613,10 +588,8 @@ function computeRows(b, data, dates, win) {
             windDir: wdir, windTag: windTag(wdir, b.onshore), cloudTrend, ...call};
   });
 }
-const RAW = new Map();   // beach name -> {data, dates}; lets the Feels-like selector recompute without refetching
 async function evaluateBeach(b, dates, win = [WIN_START, WIN_END]) {
   const data = await fetchBeachData(b);
-  RAW.set(b.name, {data, dates});
   return buildResult(b, data, dates, win);
 }
 function buildResult(b, data, dates, win) {
@@ -688,13 +661,13 @@ if (typeof document !== "undefined") {
       ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th><th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
-  const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"), feelsSel = document.getElementById("feelsSel"),
+  const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v3:";
-  const saveCache = choice => { try { localStorage.setItem(CACHE + FEELS_STYLE + ":" + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
+  const CACHE = "beachForecast:v4:";
+  const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
-    try { const c = JSON.parse(localStorage.getItem(CACHE + FEELS_STYLE + ":" + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
+    try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
     return null;
   };
   const clock = ts => new Date(ts).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
@@ -726,7 +699,7 @@ if (typeof document !== "undefined") {
   const legendHtml = () =>
       `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
       `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
-      `Feels-like: one formula for both sources, ${FEELS_STYLE === "nws" ? "NWS convention (wind chill ≤50°F, heat index ≥80°F, air temp between)" : FEELS_STYLE === "humid" ? "NWS convention plus humidity warmth from 60°F up" : FEELS_STYLE === "steadman" ? "Steadman apparent temperature from temperature, humidity and wind" : "Weather Underground-like: wind-chill formula below 62°F, Steadman apparent temperature above 72°F, blended in between"}. ` +
+      `Feels-like: one formula for both sources, from each source\u2019s own temperature, humidity and wind: wind-chill formula below 62°F, Steadman apparent temperature above 72°F, blended in between (sun is not included). ` +
       `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–2; HRRR only reaches day 1); days 3+ use NWS and OM. ` +
       `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud; the cloud line under Sun shows the first→last hour of the window. ` +
       `Wind is the window maximum; direction is display only. Rain amount (OM) and "thunder possible" (NWS hourly) are shown but do not change the call. ` +
@@ -757,30 +730,13 @@ if (typeof document !== "undefined") {
       if (pending) { pending = false; run(); }
     }
   }
-  const FEELS_OPTIONS = [["wu", "WU-like (default)", "Wind chill when cool, humidity and wind when warm; fitted to Weather Underground"],
-                         ["steadman", "Steadman", "Humidity and wind count at every temperature; runs cold on cool, breezy mornings"],
-                         ["humid", "Humid", "Air temp, plus humidity warmth from 60°F up; heat index at 80°F and above"],
-                         ["nws", "NWS", "Air temp between 50 and 80°F; wind chill below, heat index above"]];
-  function buildFeelsList() {
-    feelsSel.innerHTML = FEELS_OPTIONS.map(([v, t, d]) => `<option value="${v}" title="${esc(d)}">${t}</option>`).join("");
-    feelsSel.value = FEELS_STYLE;
-  }
   buildBeachList();
-  buildFeelsList();
   refreshLabels();
   sel.addEventListener("change", run);
   winSel.addEventListener("change", () => {
     currentWin = winSel.value.split("-").map(Number); WIN_START = currentWin[0]; WIN_END = currentWin[1];
     refreshLabels();
     if (results.length && results.every(r => r.byWindow[currentWin.join("-")])) renderAll(); else run();
-  });
-  feelsSel.addEventListener("change", () => {
-    FEELS_STYLE = feelsSel.value; refreshLabels();
-    const raws = results.map(r => RAW.get(r.beach.name));
-    if (results.length && raws.every(Boolean)) {   // data already in memory: recompute instantly
-      results = results.map((r, i) => buildResult(r.beach, raws[i].data, raws[i].dates, currentWin));
-      renderAll(); saveCache(sel.value);
-    } else run();
   });
   document.getElementById("refresh").addEventListener("click", run);
   run();
