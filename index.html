@@ -626,9 +626,10 @@ if (typeof document !== "undefined") {
         <td class="${windCls}">${f(r.u.wind, " mph")}<span class="small">NWS ${f(r.n?.wind)} · OM ${f(r.o?.wind)}</span>${windDir}</td>
         <td class="why">${esc(r.why)}${closeNote}</td></tr>`;
     }).join("");
-    const wq = b.proxy ? "uses a nearest-site proxy, so it can never decide the call" : "not checked in the browser (use the Python script to enforce it)";
-    return `<h2>${esc(b.name)}</h2>
-      <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · regional signal, not beach-proof · Water quality ${wq} · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
+    // const wq = b.proxy ? "uses a nearest-site proxy, so it can never decide the call" : "not checked in the browser (use the Python script to enforce it)";
+    // return `<h2>${esc(b.name)}
+    </h2>
+      <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · Water quality ${wq} · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
       ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th><th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -646,7 +647,7 @@ if (typeof document !== "undefined") {
     const lvl = ripLevel ?? "unavailable";
     return lvl === "High"
       ? `<p class="rip">⚠ HIGH rip current risk today. Informational: it does not change the call, but swim with caution.</p>`
-      : `<p class="meta">Rip current today (informational, never decides): ${esc(lvl)}</p>`;
+      : `<p class="meta">Rip current today: ${esc(lvl)}</p>`;
   }
   function renderAll() {
     const openKeys = new Set([...document.querySelectorAll("details[open]")].map(d => d.dataset.k));
