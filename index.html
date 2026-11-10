@@ -592,6 +592,7 @@ if (typeof document !== "undefined") {
   }
   function render(res, winKey) {
     const b = res.beach, rt = res.rt, src = res.sources;
+    const rtTxt = rt.status === "detected" ? `${rt.severity} (${Math.round(rt.count).toLocaleString()} cells/L)` : rt.status;
     const sourceWarn = [!src.nws && "NWS unavailable", !src.om && "Open-Meteo unavailable", !src.redtide && "Red tide unavailable"].filter(Boolean);
     const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}.</p>` : "");
     const rows = (res.byWindow[winKey] || res.rows).map(r => {
@@ -620,7 +621,7 @@ if (typeof document !== "undefined") {
         <td class="why">${esc(r.why)}${closeNote}</td></tr>`;
     }).join("");
     return `<h2>${esc(b.name)}</h2>
-      <p class="meta">Water quality · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
+      <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · Water quality · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
       ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th><th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
