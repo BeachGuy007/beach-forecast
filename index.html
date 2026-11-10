@@ -11,8 +11,8 @@
   Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for temperature and
   wind, one feels-like formula, sun % = 100 - cloud cover, rain = average of two source
   families (NWS and Open-Meteo). NWS hourly can force a NO-GO when rain is imminent.
-  Water quality is fetched from floridahealthybeaches.com (CORS proxy when needed).
-  The crowd model stays in the Python reports only.
+  Water quality links to floridahealthybeaches.com per beach (live status when
+  CORS allows). The crowd model stays in the Python reports only.
  -->
 <style>
   :root{
@@ -96,22 +96,25 @@ let BEACHES = [
   {name:"Caspersen Beach", onshore:245, lat:27.056048, lon:-82.442835, link:"https://visitbeaches.org/beach/40/report/64770", proxy:true},
 ];
 
-/* Florida Healthy Beaches site map (same as Python BACTERIA_SITES) */
+/* Florida Healthy Beaches: same sites as Python; slug builds the per-beach URL. */
 const BACTERIA_SITES = {
-  "Nokomis Beach": {county:"sarasota", site:"NOKOMIS BEACH", match:"exact"},
-  "Blind Pass Beach": {county:"sarasota", site:"BLIND PASS BEACH", match:"exact"},
-  "Manasota Key Beach": {county:"sarasota", site:"MANASOTA KEY BEACH", match:"exact"},
-  "Siesta Key": {county:"sarasota", site:"LIDO CASINO BEACH", match:"nearest"},
-  "Lido Beach": {county:"sarasota", site:"LIDO CASINO BEACH", match:"exact"},
-  "Fort DeSoto": {county:"pinellas", site:"FORT DESOTO NORTH BEACH", match:"exact"},
-  "Sunset Beach (Treasure Island)": {county:"pinellas", site:"INDIAN ROCKS BEACH", match:"nearest"},
-  "Pass-a-Grille Beach (South)": {county:"pinellas", site:"FORT DESOTO NORTH BEACH", match:"nearest"},
-  "Manatee/Holmes Beach": {county:"manatee", site:"MANATEE PUBLIC BEACH NORTH", match:"exact"},
-  "Coquina": {county:"manatee", site:"COQUINA BEACH NORTH", match:"exact"},
-  "Bean Point (Anna Maria)": {county:"manatee", site:"CITY OF ANNA MARIA - GULF BLVD", match:"exact"},
-  "Caspersen Beach": {county:"sarasota", site:"BROHARD PARK", match:"nearest"},
+  "Nokomis Beach": {county:"sarasota", site:"NOKOMIS BEACH", slug:"nokomis-beach", match:"exact"},
+  "Blind Pass Beach": {county:"sarasota", site:"BLIND PASS BEACH", slug:"blind-pass-beach", match:"exact"},
+  "Manasota Key Beach": {county:"sarasota", site:"MANASOTA KEY BEACH", slug:"manasota-key-beach", match:"exact"},
+  "Siesta Key": {county:"sarasota", site:"LIDO CASINO BEACH", slug:"lido-casino-beach", match:"nearest"},
+  "Lido Beach": {county:"sarasota", site:"LIDO CASINO BEACH", slug:"lido-casino-beach", match:"exact"},
+  "Fort DeSoto": {county:"pinellas", site:"FORT DESOTO NORTH BEACH", slug:"fort-desoto-north-beach", match:"exact"},
+  "Sunset Beach (Treasure Island)": {county:"pinellas", site:"INDIAN ROCKS BEACH", slug:"indian-rocks-beach", match:"nearest"},
+  "Pass-a-Grille Beach (South)": {county:"pinellas", site:"FORT DESOTO NORTH BEACH", slug:"fort-desoto-north-beach", match:"nearest"},
+  "Manatee/Holmes Beach": {county:"manatee", site:"MANATEE PUBLIC BEACH NORTH", slug:"manatee-public-beach-north", match:"exact"},
+  "Coquina": {county:"manatee", site:"COQUINA BEACH NORTH", slug:"coquina-beach-north", match:"exact"},
+  "Bean Point (Anna Maria)": {county:"manatee", site:"CITY OF ANNA MARIA - GULF BLVD", slug:"city-of-anna-maria-gulf-blvd", match:"exact"},
+  "Caspersen Beach": {county:"sarasota", site:"BROHARD PARK", slug:"brohard-park", match:"nearest"},
 };
 const bacteriaCountyCache = new Map();
+function bacteriaUrl(mapping) {
+  return `https://www.floridahealthybeaches.com/county/${mapping.county}/beach/${mapping.slug}`;
+}
 
 /* ----------------------------------------------------------------- helpers */
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -350,20 +353,16 @@ async function fetchRedTide(b) {
   }
   return worst || {status: "clear"};
 }
-/* Florida Healthy Beaches embeds sample JSON in __NEXT_DATA__. Browser fetch is
-   blocked by CORS, so we try a public read-through proxy, then parse. */
+/* Live status from Healthy Beaches when CORS allows; always has a per-beach deep link. */
 async function fetchBacteriaCounty(county) {
   if (bacteriaCountyCache.has(county)) return bacteriaCountyCache.get(county);
   const p = (async () => {
     const pageUrl = `https://www.floridahealthybeaches.com/county/${county}`;
-    const tryUrls = [
-      pageUrl,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`,
-    ];
+    const tryUrls = [pageUrl, `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`];
     let text = null;
     for (const u of tryUrls) {
       try {
-        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 15000);
+        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 12000);
         const r = await fetch(u, {signal: ctl.signal});
         clearTimeout(timer);
         if (r.ok) { text = await r.text(); if (text && text.length > 200) break; }
@@ -384,20 +383,9 @@ async function fetchBacteriaCounty(county) {
             status: (ls.enterococcusStatus || "").trim() || null,
             sample_date: ls.sampleDate || null,
             enterococcus: ls.enterococcusValue != null ? String(ls.enterococcusValue) : null,
-            advisory: (ls.advisoryStatus || "").trim() || null,
-            site_name: name,
           };
         }
       } catch (_) {}
-    }
-    if (!Object.keys(out).length) {
-      const re = /([A-Z][A-Z0-9 .'\/()\-]+?)\s+(Good|Moderate|Poor|Caution|Advisory|Closed)\s+Latest Sample:\s*(\d{1,2}\/\d{1,2}\/\d{4})\s+Enterococcus Level:\s*([<>]?\s*[\d,]+)/gi;
-      let mm; while ((mm = re.exec(text))) {
-        out[mm[1].trim().toUpperCase()] = {
-          status: mm[2].charAt(0).toUpperCase() + mm[2].slice(1).toLowerCase(),
-          sample_date: mm[3], enterococcus: mm[4].replace(/\s+/g, ""), advisory: null, site_name: mm[1].trim().toUpperCase(),
-        };
-      }
     }
     return out;
   })();
@@ -407,17 +395,18 @@ async function fetchBacteriaCounty(county) {
 async function fetchBacteria(b) {
   const mapping = BACTERIA_SITES[b.name];
   if (!mapping) return null;
-  const county = await fetchBacteriaCounty(mapping.county);
-  const rec = county[mapping.site];
-  if (!rec) return null;
-  return {
+  const base = {
     site_name: mapping.site.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()),
-    status: rec.status,
-    sample_date: rec.sample_date,
-    enterococcus: rec.enterococcus,
     is_nearest: mapping.match === "nearest",
-    url: `https://www.floridahealthybeaches.com/county/${mapping.county}`,
+    url: bacteriaUrl(mapping),
+    status: null, sample_date: null, enterococcus: null,
   };
+  try {
+    const county = await fetchBacteriaCounty(mapping.county);
+    const rec = county[mapping.site];
+    if (rec) Object.assign(base, {status: rec.status, sample_date: rec.sample_date, enterococcus: rec.enterococcus});
+  } catch (_) {}
+  return base;
 }
 const RIP_ORDER = {Low: 0, Moderate: 1, High: 2};
 async function fetchRipFromAlerts() {
@@ -654,7 +643,7 @@ function buildResult(b, data, dates, win) {
   const key = w => w.join("-"), byWindow = {};
   for (const w of [win, ...WINDOWS.filter(x => key(x) !== key(win))]) byWindow[key(w)] = computeRows(b, data, dates, w);
   return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, bact: data.bact,
-    sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable", bacteria: !!data.bact}};
+    sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable", bacteria: !!(data.bact && data.bact.status)}};
 }
 
 /* ----------------------------------------------------------------------- UI */
@@ -685,14 +674,19 @@ if (typeof document !== "undefined") {
   function render(res, winKey) {
     const b = res.beach, rt = res.rt, src = res.sources, bact = res.bact;
     const rtTxt = rt.status === "detected" ? `${rt.severity} (${Math.round(rt.count).toLocaleString()} cells/L)` : rt.status;
+    const mapping = BACTERIA_SITES[b.name];
     let wqTxt = "Water quality: unavailable";
-    if (bact?.status) {
-      const nearest = bact.is_nearest ? ` <span class="small">(nearest: ${esc(bact.site_name)})</span>` : "";
-      const ent = bact.enterococcus != null ? ` · Enterococcus ${esc(bact.enterococcus)}` : "";
-      const samp = bact.sample_date ? ` (sampled ${esc(bact.sample_date)})` : "";
-      wqTxt = `Water quality: <b>${esc(bact.status)}</b>${ent}${samp}${nearest}`;
-    } else if (BACTERIA_SITES[b.name]) {
-      wqTxt = `Water quality: <a href="https://www.floridahealthybeaches.com/county/${BACTERIA_SITES[b.name].county}" target="_blank" rel="noopener">check Healthy Beaches</a>`;
+    if (mapping) {
+      const href = bacteriaUrl(mapping);
+      const label = mapping.site.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      const nearest = mapping.match === "nearest" ? ` <span class="small">(nearest: ${esc(label)})</span>` : "";
+      if (bact?.status) {
+        const ent = bact.enterococcus != null ? ` · Enterococcus ${esc(bact.enterococcus)}` : "";
+        const samp = bact.sample_date ? ` (sampled ${esc(bact.sample_date)})` : "";
+        wqTxt = `Water quality: <b><a href="${href}" target="_blank" rel="noopener">${esc(bact.status)}</a></b>${ent}${samp}${nearest}`;
+      } else {
+        wqTxt = `Water quality: <a href="${href}" target="_blank" rel="noopener">${esc(label)}</a>${nearest}`;
+      }
     }
     const sourceWarn = [!src.nws && "NWS unavailable", !src.om && "Open-Meteo unavailable", !src.redtide && "Red tide unavailable"].filter(Boolean);
     const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}.</p>` : "");
@@ -729,7 +723,7 @@ if (typeof document !== "undefined") {
   const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v7:";
+  const CACHE = "beachForecast:v8:";
   const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
     try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
