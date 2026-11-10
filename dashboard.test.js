@@ -11,8 +11,9 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-const EXPORTS = `;globalThis.T = {decide, closeCalls, resolve, feelsLike, fetchNWSPoints, modelWindowRain, windTag,
-  avgDir, windowHours, nextDates, computeRows, thunderInWindow, smoothedPeak, nwsWindowPop, WINDOWS};`;
+const EXPORTS = `;globalThis.T = {decide, closeCalls, resolve, modelWindowRain, windTag,
+  avgDir, windowHours, nextDates, computeRows, thunderInWindow, smoothedPeak, nwsWindowPop, WINDOWS,
+  fetchNWSPoints, fetchOmModelRain};`;
 
 function load(extra = {}) {
   const ctx = vm.createContext({ location: { search: "" }, console, setTimeout, clearTimeout, setInterval: () => 0,
@@ -35,7 +36,7 @@ test("rain NO-GO ends with (check radar) exactly once", () => {
 test("non-rain reasons never mention radar", () => {
   const { T } = load();
   const d = T.decide({ avgFeels: 75, wind: 25, rain: 10, sun: 80, feelsLow: 74 });
-  assert.equal(d.why, "wind 25 ≥ 20 mph");
+  assert.equal(d.why, "wind 25 ≥ 15 mph");
 });
 
 test("missing data gives UNKNOWN, clear data gives GO", () => {
@@ -44,10 +45,17 @@ test("missing data gives UNKNOWN, clear data gives GO", () => {
   assert.equal(T.decide({ avgFeels: 75, wind: 8, rain: 10, sun: 80, feelsLow: 74 }).label, "GO");
 });
 
+test("missing coldest-hour feels-like is UNKNOWN (not GO)", () => {
+  const { T } = load();
+  const d = T.decide({ avgFeels: 75, wind: 8, rain: 10, sun: 80, feelsLow: null });
+  assert.equal(d.label, "UNKNOWN");
+  assert.match(d.why, /coldest hour/);
+});
+
 test("close calls: only values that pass by a small margin", () => {
   const { T } = load();
-  assert.deepEqual(plain(T.closeCalls({ avgFeels: 73, feelsLow: 71, wind: 19, rain: 42, sun: 53 })),
-    ["feels 73° (limit 72°)", "coldest hour 71° (limit 70°)", "wind 19 mph (limit 20)", "rain 42% (limit 45%)", "sun 53% (limit 50%)"]);
+  assert.deepEqual(plain(T.closeCalls({ avgFeels: 73, feelsLow: 71, wind: 14, rain: 42, sun: 53 })),
+    ["feels 73° (limit 72°)", "coldest hour 71° (limit 70°)", "wind 14 mph (limit 15)", "rain 42% (limit 45%)", "sun 53% (limit 50%)"]);
   assert.deepEqual(plain(T.closeCalls({ avgFeels: 80, feelsLow: 78, wind: 8, rain: 10, sun: 90 })), []);
   assert.deepEqual(plain(T.closeCalls({ avgFeels: 71, feelsLow: 69, wind: 22, rain: 50, sun: 40 })), []);   // already failing
 });
@@ -67,19 +75,22 @@ test("a missing family is skipped, no data gives null", () => {
   assert.equal(T.resolve({}, {}, 2).rain, null);
 });
 
-test("model window rain smooths and uses only the window hours", () => {
+test("model window rain uses only the requested window hours", () => {
   const { T } = load();
-  const raw = { "2026-11-04": { 5: 90, 6: 0, 7: 30, 8: 0, 9: 0, 10: 0, 11: 90 } };
-  assert.equal(T.modelWindowRain(raw, "2026-11-04", [6, 10]), 15);   // rolling 3-hour means 15,10,10,0,0 (the first hour only has 2 neighbours)
+  // Hourly map: different PoP in early vs late hours
+  const raw = { "2026-11-04": { 5: 90, 6: 0, 7: 30, 8: 0, 9: 0, 10: 0, 11: 90, 12: 80, 13: 70 } };
+  // [6,10] hours → values 0,30,0,0,0 → rolling means → peak 15
+  assert.equal(T.modelWindowRain(raw, "2026-11-04", [6, 10]), 15);
+  // Later window [10,15] should see the afternoon rain, not the morning scalar
+  assert.equal(T.modelWindowRain(raw, "2026-11-04", [10, 13]), 80);  // 0,90,80,70 → smoothed peak around 80
   assert.equal(T.modelWindowRain(raw, "2026-11-05", [6, 10]), null);
+  // Explicit hours list (daylight-trimmed) also works
+  assert.equal(T.modelWindowRain(raw, "2026-11-04", [8, 9, 10]), 0);
+  // Legacy scalar still accepted
+  assert.equal(T.modelWindowRain({ "2026-11-04": 42 }, "2026-11-04", [6, 10]), 42);
 });
 
-// ------------------------------------------------------------------ formulas and helpers
-test("missing humidity uses 70% (same as the Python script)", () => {
-  const { T } = load();
-  assert.equal(T.feelsLike(88, null, 5), T.feelsLike(88, 70, 5));
-});
-
+// ------------------------------------------------------------------ helpers
 test("wind direction helpers", () => {
   const { T } = load();
   assert.equal(T.windTag(250, 250), "onshore");
@@ -156,8 +167,8 @@ test("results are saved and shown instantly on the next visit", async () => {
   const b = stubBrowser();
   load({ document: b.document, localStorage: b.localStorage, fetch: b.fetch });
   await settle();
-  assert.ok(b.store["beachForecast:v2:Siesta Key"]);
-  const b2 = stubBrowser(); b2.store["beachForecast:v2:Siesta Key"] = b.store["beachForecast:v2:Siesta Key"];
+  assert.ok(b.store["beachForecast:v9:Siesta Key"]);
+  const b2 = stubBrowser(); b2.store["beachForecast:v9:Siesta Key"] = b.store["beachForecast:v9:Siesta Key"];
   load({ document: b2.document, localStorage: b2.localStorage, fetch: b2.fetch });
   assert.match(b2.els.out.innerHTML, /Siesta Key/);       // painted from the saved copy before any network answer
 });

@@ -9,8 +9,10 @@
   Live Beach Go/No-Go. One file, no build step; host it anywhere (GitHub Pages works).
   It calls NWS (api.weather.gov), Open-Meteo and FWC straight from the browser.
   Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for temperature and
-  wind, one feels-like formula, sun % = 100 - cloud cover, rain = average of two source
-  families (NWS and Open-Meteo). NWS hourly can force a NO-GO when rain is imminent.
+  wind; each provider supplies its own apparent temperature (NWS apparentTemperature /
+  Open-Meteo apparent_temperature), then those values are blended. Sun % = 100 - cloud cover;
+  rain = average of two source families (NWS and Open-Meteo). NWS hourly can force a NO-GO
+  when rain is imminent.
   Water quality links to the exact Florida Healthy Beaches sample site
   (no client scrape — CORS blocks it). Crowd model stays in Python reports.
  -->
@@ -252,32 +254,32 @@ async function fetchOM(b) {
     "&daily=sunrise&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FNew_York&forecast_days=8";
   return getJson(u);
 }
-async function fetchOmModelRain(b, model, days = 2, hourMatcher = null) {
+async function fetchOmModelRain(b, model, days = 2) {
+  // Preserve hourly PoP so each window can aggregate independently.
   const u = "https://api.open-meteo.com/v1/gfs?latitude=" + b.lat + "&longitude=" + b.lon +
     "&hourly=precipitation_probability&models=" + model + "&timezone=America%2FNew_York&forecast_days=" + days;
   const d = await getJson(u, 1), out = {};
   const t = d?.hourly?.time, p = d?.hourly?.precipitation_probability;
   if (!t || !p || t.length !== p.length) return out;
-  const dayMap = {};
   t.forEach((ts, i) => {
-    const [date, hh] = ts.split("T"), hour = +hh.slice(0, 2);
     if (p[i] == null) return;
-    if (hourMatcher && !hourMatcher(date, hour)) return;
-    (dayMap[date] ??= []).push(p[i]);
+    const [date, hh] = ts.split("T"), hour = +hh.slice(0, 2);
+    (out[date] ??= {})[hour] = p[i];
   });
-  for (const [date, vals] of Object.entries(dayMap)) {
-    out[date] = vals.length ? smoothedPeak(vals) : null;
-  }
   return out;
 }
-const fetchHRRR = (b, hourMatcher = null) => fetchOmModelRain(b, "gfs_hrrr", 2, hourMatcher);
-const fetchNBM = (b, hourMatcher = null) => fetchOmModelRain(b, "ncep_nbm_conus", 3, hourMatcher);
-function modelWindowRain(raw, date, win) {
+const fetchHRRR = b => fetchOmModelRain(b, "gfs_hrrr", 2);
+const fetchNBM = b => fetchOmModelRain(b, "ncep_nbm_conus", 3);
+function modelWindowRain(raw, date, winOrHours) {
+  // Aggregate hourly model PoP for one window. Accepts either [start,end] or an explicit hours list.
   const day = raw?.[date];
   if (day == null) return null;
-  if (typeof day === "number") return day;
+  if (typeof day === "number") return day;   // legacy scalar (tests / old cache)
+  const hours = Array.isArray(winOrHours) && winOrHours.length && typeof winOrHours[0] === "number" && winOrHours.length > 2
+    ? winOrHours
+    : (() => { const w = winOrHours || [6, 10]; const hs = []; for (let h = w[0]; h <= w[1]; h++) hs.push(h); return hs; })();
   const v = [];
-  for (let h = win[0]; h <= win[1]; h++) if (day[h] != null) v.push(day[h]);
+  for (const h of hours) if (day[h] != null) v.push(day[h]);
   return smoothedPeak(v);
 }
 async function fetchNWSHourly(b) {
@@ -506,7 +508,9 @@ function resolve(n, o, dOut, extras = {}) {
 function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
   const nogo = [];
   let radarIdx = -1;
-  const missing = [["feels", avgFeels], ["wind", wind], ["rain", rain], ["sun", sun]].filter(([, v]) => v == null).map(([k]) => k);
+  // Coldest-hour is a hard safety check: treat a missing value as UNKNOWN (same as avg feels).
+  const missing = [["feels", avgFeels], ["coldest hour", feelsLow], ["wind", wind], ["rain", rain], ["sun", sun]]
+    .filter(([, v]) => v == null).map(([k]) => k);
   if (avgFeels != null && avgFeels < GO_AVG_FEELS_MIN) nogo.push(`feels ${avgFeels.toFixed(0)}° < ${GO_AVG_FEELS_MIN}°`);
   if (feelsLow != null && feelsLow < GO_FEELS_LOW_MIN) nogo.push(`coldest hour ${feelsLow.toFixed(0)}° < ${GO_FEELS_LOW_MIN}°`);
   if (wind != null && wind >= GO_WIND_NOGO) nogo.push(`wind ${wind.toFixed(0)} ≥ ${GO_WIND_NOGO} mph`);
@@ -538,9 +542,8 @@ async function fetchBeachData(b) {
   (om?.daily?.time || []).forEach((d, i) => {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
   });
-  const hourMatcher = (date, h) => windowHours(sunrise[date] ?? null).includes(h);
   const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
-    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
+    fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
   ]);
   return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap};
 }
@@ -555,7 +558,7 @@ function computeRows(b, data, dates, win) {
     const hours = windowHours(sunrise[date] ?? null, win);
     const prev = etParts(new Date(Date.parse(date + "T12:00:00Z") - 86400000)).date;
     const n = nwsDay(nwsRaw, date, hours, prev), o = omDay(om, date, hours, cloudMap);
-    const hr = modelWindowRain(hrrr, date, win), nb = modelWindowRain(nbm, date, win);
+    const hr = modelWindowRain(hrrr, date, hours), nb = modelWindowRain(nbm, date, hours);
     const hourlyRain = dOut === 0 ? nwsHourlyWindowRain(hourly, date, hours) : null;
     const u = resolve(n, o, dOut, {hrrr: hr, nbm: nb, hourlyRain});
     const sun = u.sky == null ? null : Math.max(0, 100 - Math.round(u.sky));
