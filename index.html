@@ -11,8 +11,8 @@
   Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for temperature and
   wind, one feels-like formula, sun % = 100 - cloud cover, rain = average of two source
   families (NWS and Open-Meteo). NWS hourly can force a NO-GO when rain is imminent.
-  Water quality links to floridahealthybeaches.com per beach (live status when
-  CORS allows). The crowd model stays in the Python reports only.
+  Water quality links to the exact Florida Healthy Beaches sample site
+  (no client scrape — CORS blocks it). Crowd model stays in Python reports.
  -->
 <style>
   :root{
@@ -96,7 +96,7 @@ let BEACHES = [
   {name:"Caspersen Beach", onshore:245, lat:27.056048, lon:-82.442835, link:"https://visitbeaches.org/beach/40/report/64770", proxy:true},
 ];
 
-/* Florida Healthy Beaches: same sites as Python; slug builds the per-beach URL. */
+/* Florida Healthy Beaches sample sites (same mapping as Python). Links only — no CORS scrape. */
 const BACTERIA_SITES = {
   "Nokomis Beach": {county:"sarasota", site:"NOKOMIS BEACH", slug:"nokomis-beach", match:"exact"},
   "Blind Pass Beach": {county:"sarasota", site:"BLIND PASS BEACH", slug:"blind-pass-beach", match:"exact"},
@@ -111,9 +111,11 @@ const BACTERIA_SITES = {
   "Bean Point (Anna Maria)": {county:"manatee", site:"CITY OF ANNA MARIA - GULF BLVD", slug:"city-of-anna-maria-gulf-blvd", match:"exact"},
   "Caspersen Beach": {county:"sarasota", site:"BROHARD PARK", slug:"brohard-park", match:"nearest"},
 };
-const bacteriaCountyCache = new Map();
 function bacteriaUrl(mapping) {
   return `https://www.floridahealthybeaches.com/county/${mapping.county}/beach/${mapping.slug}`;
+}
+function bacteriaLabel(mapping) {
+  return mapping.site.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
 
 /* ----------------------------------------------------------------- helpers */
@@ -353,61 +355,6 @@ async function fetchRedTide(b) {
   }
   return worst || {status: "clear"};
 }
-/* Live status from Healthy Beaches when CORS allows; always has a per-beach deep link. */
-async function fetchBacteriaCounty(county) {
-  if (bacteriaCountyCache.has(county)) return bacteriaCountyCache.get(county);
-  const p = (async () => {
-    const pageUrl = `https://www.floridahealthybeaches.com/county/${county}`;
-    const tryUrls = [pageUrl, `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`];
-    let text = null;
-    for (const u of tryUrls) {
-      try {
-        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 12000);
-        const r = await fetch(u, {signal: ctl.signal});
-        clearTimeout(timer);
-        if (r.ok) { text = await r.text(); if (text && text.length > 200) break; }
-      } catch (_) {}
-    }
-    if (!text) return {};
-    const out = {};
-    const m = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(text);
-    if (m) {
-      try {
-        const root = JSON.parse(m[1]);
-        const beaches = root?.props?.pageProps?.county?.beaches || root?.pageProps?.county?.beaches || [];
-        for (const b of beaches) {
-          const ls = b.latestSample; if (!ls) continue;
-          const name = (b.name || ls.beachName || "").trim().toUpperCase();
-          if (!name) continue;
-          out[name] = {
-            status: (ls.enterococcusStatus || "").trim() || null,
-            sample_date: ls.sampleDate || null,
-            enterococcus: ls.enterococcusValue != null ? String(ls.enterococcusValue) : null,
-          };
-        }
-      } catch (_) {}
-    }
-    return out;
-  })();
-  bacteriaCountyCache.set(county, p);
-  return p;
-}
-async function fetchBacteria(b) {
-  const mapping = BACTERIA_SITES[b.name];
-  if (!mapping) return null;
-  const base = {
-    site_name: mapping.site.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()),
-    is_nearest: mapping.match === "nearest",
-    url: bacteriaUrl(mapping),
-    status: null, sample_date: null, enterococcus: null,
-  };
-  try {
-    const county = await fetchBacteriaCounty(mapping.county);
-    const rec = county[mapping.site];
-    if (rec) Object.assign(base, {status: rec.status, sample_date: rec.sample_date, enterococcus: rec.enterococcus});
-  } catch (_) {}
-  return base;
-}
 const RIP_ORDER = {Low: 0, Moderate: 1, High: 2};
 async function fetchRipFromAlerts() {
   const d = await getJson("https://api.weather.gov/alerts/active?zone=FLZ050,FLZ151,FLZ155,FLZ160,FLZ162", 1);
@@ -556,7 +503,7 @@ function resolve(n, o, dOut, extras = {}) {
 }
 
 /* --------------------------------------------------------------- decision */
-function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy, bacteriaStatus, bacteriaIsProxy}) {
+function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
   const nogo = [];
   let radarIdx = -1;
   const missing = [["feels", avgFeels], ["wind", wind], ["rain", rain], ["sun", sun]].filter(([, v]) => v == null).map(([k]) => k);
@@ -568,8 +515,6 @@ function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy, bacter
   if (precipWhy) { nogo.push(precipWhy); radarIdx = nogo.length - 1; }
   if (radarIdx >= 0) nogo[radarIdx] += " (check radar)";
   if (redTide === "moderate" || redTide === "severe") nogo.push(`red tide ${redTide}`);
-  const bact = (bacteriaStatus || "").toLowerCase();
-  if (["poor", "advisory", "closed"].includes(bact) && !bacteriaIsProxy) nogo.push(`water quality ${bact}`);
   if (nogo.length) return {label: "NO-GO", why: nogo.join("; ")};
   if (missing.length) return {label: "UNKNOWN", why: "missing: " + missing.join(", ")};
   return {label: "GO", why: "all clear"};
@@ -594,13 +539,13 @@ async function fetchBeachData(b) {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
   });
   const hourMatcher = (date, h) => windowHours(sunrise[date] ?? null).includes(h);
-  const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap, bact] = await Promise.all([
-    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b), fetchBacteria(b)
+  const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
+    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
   ]);
-  return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap, bact};
+  return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap};
 }
 function computeRows(b, data, dates, win) {
-  const {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap, bact} = data;
+  const {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap} = data;
   const sunrise = {};
   (om?.daily?.time || []).forEach((d, i) => {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
@@ -619,8 +564,7 @@ function computeRows(b, data, dates, win) {
     const passed = dOut === 0 && etParts(new Date()).hour > Math.max(...hours);
     const rainCall = u.rain == null ? null : Math.round(u.rain);
     const d = decide({avgFeels: u.feelsAvg, wind: u.wind, rain: rainCall, sun,
-                      feelsLow: u.feelsLow, redTide: rt_sev, precipWhy: imm.flag ? imm.why : null,
-                      bacteriaStatus: bact?.status, bacteriaIsProxy: !!bact?.is_nearest});
+                      feelsLow: u.feelsLow, redTide: rt_sev, precipWhy: imm.flag ? imm.why : null});
     let coldH = null, coldV = Infinity;
     for (const [h, v] of Object.entries(u.feelsHourly)) if (v < coldV) { coldV = v; coldH = +h; }
     const call = passed ? {label: "PASSED", why: "window has ended"} : d;
@@ -642,8 +586,7 @@ async function evaluateBeach(b, dates, win = [WIN_START, WIN_END]) {
 function buildResult(b, data, dates, win) {
   const key = w => w.join("-"), byWindow = {};
   for (const w of [win, ...WINDOWS.filter(x => key(x) !== key(win))]) byWindow[key(w)] = computeRows(b, data, dates, w);
-  return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, bact: data.bact,
-    sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable", bacteria: !!(data.bact && data.bact.status)}};
+  return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable"}};
 }
 
 /* ----------------------------------------------------------------------- UI */
@@ -672,21 +615,15 @@ if (typeof document !== "undefined") {
     return `<table class="ovt"><thead><tr><th>Day</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
   }
   function render(res, winKey) {
-    const b = res.beach, rt = res.rt, src = res.sources, bact = res.bact;
+    const b = res.beach, rt = res.rt, src = res.sources;
     const rtTxt = rt.status === "detected" ? `${rt.severity} (${Math.round(rt.count).toLocaleString()} cells/L)` : rt.status;
     const mapping = BACTERIA_SITES[b.name];
     let wqTxt = "Water quality: unavailable";
     if (mapping) {
       const href = bacteriaUrl(mapping);
-      const label = mapping.site.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-      const nearest = mapping.match === "nearest" ? ` <span class="small">(nearest: ${esc(label)})</span>` : "";
-      if (bact?.status) {
-        const ent = bact.enterococcus != null ? ` · Enterococcus ${esc(bact.enterococcus)}` : "";
-        const samp = bact.sample_date ? ` (sampled ${esc(bact.sample_date)})` : "";
-        wqTxt = `Water quality: <b><a href="${href}" target="_blank" rel="noopener">${esc(bact.status)}</a></b>${ent}${samp}${nearest}`;
-      } else {
-        wqTxt = `Water quality: <a href="${href}" target="_blank" rel="noopener">${esc(label)}</a>${nearest}`;
-      }
+      const label = bacteriaLabel(mapping);
+      const nearest = mapping.match === "nearest" ? ` <span class="small">(nearest)</span>` : "";
+      wqTxt = `Water quality: <a href="${href}" target="_blank" rel="noopener">${esc(label)}</a>${nearest}`;
     }
     const sourceWarn = [!src.nws && "NWS unavailable", !src.om && "Open-Meteo unavailable", !src.redtide && "Red tide unavailable"].filter(Boolean);
     const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}.</p>` : "");
@@ -723,7 +660,7 @@ if (typeof document !== "undefined") {
   const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v8:";
+  const CACHE = "beachForecast:v9:";
   const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
     try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
