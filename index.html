@@ -25,7 +25,6 @@
   *{box-sizing:border-box}
   body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
   h1{font-size:20px;margin:0 0 2px}
-  .sub{color:var(--muted);margin:0 0 12px}
   .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
   select,button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
   button{cursor:pointer}
@@ -50,13 +49,11 @@
   .rip{font-weight:700;color:var(--bad)}
   .ovt{min-width:0;width:auto;margin:4px 0 10px;font-size:12px}
   .ovt td,.ovt th{padding:3px 10px}
-  .legend{margin-top:22px;color:var(--muted);font-size:12px}
   a{color:var(--accent)}
 </style>
 </head>
 <body>
 <h1 id="title">Beach Go/No-Go</h1>
-<p class="sub">NWS + Open-Meteo (+ HRRR/NBM/hourly on near days). Window trimmed to daylight (~45 min before sunrise).</p>
 <div class="bar">
   <label>Beach <select id="beachSel"></select></label>
   <label>Window <select id="winSel"></select></label>
@@ -64,7 +61,6 @@
   <span class="status" id="status"></span>
 </div>
 <div id="out"></div>
-<div class="legend" id="legend"></div>
 
 <script>
 "use strict";
@@ -592,15 +588,12 @@ if (typeof document !== "undefined") {
         const r = res.byWindow[k][i];
         return `<td class="call ${cls(r.label)}" title="${esc(r.why)}">${r.label}</td>`;
       }).join("") + "</tr>").join("");
-    return `<p class="meta">Calls by window (hover a cell for the reasons):</p><table class="ovt"><thead><tr><th>Day</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    return `<table class="ovt"><thead><tr><th>Day</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
   }
   function render(res, winKey) {
     const b = res.beach, rt = res.rt, src = res.sources;
-    const rtTxt = rt.status === "detected" ? `${rt.severity} (${Math.round(rt.count).toLocaleString()} cells/L)` : rt.status;
     const sourceWarn = [!src.nws && "NWS unavailable", !src.om && "Open-Meteo unavailable", !src.redtide && "Red tide unavailable"].filter(Boolean);
-    const optional = [!src.hrrr && "HRRR", !src.nbm && "NBM"].filter(Boolean);
-    const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}. Any unavailable source is left out of the averages.</p>` : "") +
-                 (optional.length ? `<p class="meta">${optional.join(" and ")} not available right now; rain uses the other sources.</p>` : "");
+    const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}.</p>` : "");
     const rows = (res.byWindow[winKey] || res.rows).map(r => {
       const win = `${hourLabel(r.hours[0])}–${hourLabel(r.winEnd)}`;
       const coldCls = r.u.feelsLow != null && r.u.feelsLow < GO_FEELS_LOW_MIN ? "bad" : "";
@@ -626,9 +619,8 @@ if (typeof document !== "undefined") {
         <td class="${windCls}">${f(r.u.wind, " mph")}<span class="small">NWS ${f(r.n?.wind)} · OM ${f(r.o?.wind)}</span>${windDir}</td>
         <td class="why">${esc(r.why)}${closeNote}</td></tr>`;
     }).join("");
-    const wq = b.proxy ? "uses a nearest-site proxy" : "not checked in the browser (use the Python script to enforce it)";
     return `<h2>${esc(b.name)}</h2>
-      <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · Water quality ${wq} · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
+      <p class="meta">Water quality · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
       ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th><th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -645,8 +637,8 @@ if (typeof document !== "undefined") {
   function ripHtml() {
     const lvl = ripLevel ?? "unavailable";
     return lvl === "High"
-      ? `<p class="rip">⚠ HIGH rip current risk today. Informational: it does not change the call, but swim with caution.</p>`
-      : `<p class="meta">Rip current today (informational, never decides): ${esc(lvl)}</p>`;
+      ? `<p class="rip">⚠ Rip current today: High</p>`
+      : `<p class="meta">Rip current today: ${esc(lvl)}</p>`;
   }
   function renderAll() {
     const openKeys = new Set([...document.querySelectorAll("details[open]")].map(d => d.dataset.k));
@@ -660,21 +652,12 @@ if (typeof document !== "undefined") {
     document.title = "Beach Go/No-Go · " + label;
     winSel.innerHTML = WINDOWS.map(w => `<option value="${w.join("-")}">${winLabel(w)}</option>`).join("");
     winSel.value = currentWin.join("-");
-    document.getElementById("legend").innerHTML = legendHtml();
   }
   function buildBeachList() {
     sel.innerHTML = BEACHES.map(b => `<option value="${esc(b.name)}">${esc(b.name)}${b.name === PRIMARY ? " (primary)" : ""}</option>`).join("") +
                     `<option value="__all">All beaches</option>`;
     sel.value = BEACHES.some(b => b.name === PRIMARY) ? PRIMARY : BEACHES[0].name;
   }
-  const legendHtml = () =>
-      `<b>NO-GO</b> if any: avg feels &lt;${GO_AVG_FEELS_MIN}° · coldest hour &lt;${GO_FEELS_LOW_MIN}° · wind ≥${GO_WIND_NOGO} mph · rain ≥${GO_RAIN_NOGO}% · sun &lt;${GO_SUN_MIN}% · precip imminent. ` +
-      `<b>UNKNOWN</b> if feels, wind, rain or sun is missing. <b>PASSED</b> once today's window is over. <b>GO</b> otherwise; a gray "close call" note means a GO passes a limit by only a little. ` +
-      `Feels-like: each source\u2019s own number, NWS\u2019s gridded apparent temperature and Open-Meteo\u2019s apparent temperature (which includes sun), averaged 50/50 hour by hour; nothing is recomputed here. ` +
-      `Rain = average of two source families: NWS (grid + hourly on day 0) and Open-Meteo (OM + HRRR + NBM on days 0–2; HRRR only reaches day 1); days 3+ use NWS and OM. ` +
-      `Sun = average of NWS sky cover and Open-Meteo cloud cover (mean of 4 models); sun % = 100 − cloud; the cloud line under Sun shows the first→last hour of the window. ` +
-      `Wind is the window maximum; direction is display only. Rain amount (OM) and "thunder possible" (NWS hourly) are shown but do not change the call. ` +
-      `All three windows come from the same data, so switching windows needs no reload.`;
   async function run() {
     if (running) { pending = true; return; }
     running = true;
