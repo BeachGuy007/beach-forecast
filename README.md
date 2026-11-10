@@ -25,11 +25,12 @@ Open the GitHub Pages site on any phone or tablet.
 | Rain imminent (today, NWS hourly, inside the window) | yes |
 | Red tide (FWC, 15 mi, last 8 days) | moderate or severe |
 
-**UNKNOWN** if feels-like, wind, rain or sun is missing. **PASSED** once today's window is over.
+**UNKNOWN** if average or coldest-hour feels-like, wind, rain, or sun is missing. **PASSED** once today's window is over.
 **GO** otherwise; a gray *close call* note means a GO passes a limit by only a little.
 A rain-related reason always ends with *(check radar)*.
 
-- **Temperature and wind:** NWS and Open-Meteo averaged 50/50; one feels-like formula for both.
+- **Feels-like:** NWS apparent temperature and Open-Meteo apparent temperature are used as published by each provider, then blended 50/50 hour by hour. If a provider omits an hour, that provider's air temperature is used for that hour.
+- **Temperature and wind:** NWS and Open-Meteo averaged 50/50.
 - **Sun:** 100 minus cloud cover; NWS sky cover averaged with the mean of four Open-Meteo models.
 - **Rain:** average of two source families, NWS (grid + hourly on day 0) and Open-Meteo (default
   model + HRRR + NBM on days 0–1). Averaging per family stops one forecast being counted several times.
@@ -42,8 +43,7 @@ Water quality and the crowd model live only in the Python reports (not in this r
 ```
 npm test
 ```
-Runs `tests/dashboard.test.js` (Node 20+). The tests load the page's own script, so there is nothing to
-export. GitHub Actions runs them on every push.
+Runs the Node tests in `dashboard.test.js` and `tests/forecast.test.mjs`. The tests load the page's own script, so there is nothing to export. GitHub Actions runs them on every push.
 
 ## Keeping secrets out
 The e-mail reports are Python scripts with credentials, so they are **not** part of this repo and
