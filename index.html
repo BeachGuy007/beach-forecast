@@ -11,7 +11,8 @@
   Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for temperature and
   wind, one feels-like formula, sun % = 100 - cloud cover, rain = average of two source
   families (NWS and Open-Meteo). NWS hourly can force a NO-GO when rain is imminent.
-  Water quality and the crowd model are only in the Python reports.
+  Water quality is fetched from floridahealthybeaches.com (CORS proxy when needed).
+  The crowd model stays in the Python reports only.
  -->
 <style>
   :root{
@@ -94,6 +95,23 @@ let BEACHES = [
   {name:"Coquina", onshore:248, lat:27.447368, lon:-82.691881, link:"https://visitbeaches.org/beach/8/report/54287"},
   {name:"Caspersen Beach", onshore:245, lat:27.056048, lon:-82.442835, link:"https://visitbeaches.org/beach/40/report/64770", proxy:true},
 ];
+
+/* Florida Healthy Beaches site map (same as Python BACTERIA_SITES) */
+const BACTERIA_SITES = {
+  "Nokomis Beach": {county:"sarasota", site:"NOKOMIS BEACH", match:"exact"},
+  "Blind Pass Beach": {county:"sarasota", site:"BLIND PASS BEACH", match:"exact"},
+  "Manasota Key Beach": {county:"sarasota", site:"MANASOTA KEY BEACH", match:"exact"},
+  "Siesta Key": {county:"sarasota", site:"LIDO CASINO BEACH", match:"nearest"},
+  "Lido Beach": {county:"sarasota", site:"LIDO CASINO BEACH", match:"exact"},
+  "Fort DeSoto": {county:"pinellas", site:"FORT DESOTO NORTH BEACH", match:"exact"},
+  "Sunset Beach (Treasure Island)": {county:"pinellas", site:"INDIAN ROCKS BEACH", match:"nearest"},
+  "Pass-a-Grille Beach (South)": {county:"pinellas", site:"FORT DESOTO NORTH BEACH", match:"nearest"},
+  "Manatee/Holmes Beach": {county:"manatee", site:"MANATEE PUBLIC BEACH NORTH", match:"exact"},
+  "Coquina": {county:"manatee", site:"COQUINA BEACH NORTH", match:"exact"},
+  "Bean Point (Anna Maria)": {county:"manatee", site:"CITY OF ANNA MARIA - GULF BLVD", match:"exact"},
+  "Caspersen Beach": {county:"sarasota", site:"BROHARD PARK", match:"nearest"},
+};
+const bacteriaCountyCache = new Map();
 
 /* ----------------------------------------------------------------- helpers */
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -332,6 +350,75 @@ async function fetchRedTide(b) {
   }
   return worst || {status: "clear"};
 }
+/* Florida Healthy Beaches embeds sample JSON in __NEXT_DATA__. Browser fetch is
+   blocked by CORS, so we try a public read-through proxy, then parse. */
+async function fetchBacteriaCounty(county) {
+  if (bacteriaCountyCache.has(county)) return bacteriaCountyCache.get(county);
+  const p = (async () => {
+    const pageUrl = `https://www.floridahealthybeaches.com/county/${county}`;
+    const tryUrls = [
+      pageUrl,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`,
+    ];
+    let text = null;
+    for (const u of tryUrls) {
+      try {
+        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 15000);
+        const r = await fetch(u, {signal: ctl.signal});
+        clearTimeout(timer);
+        if (r.ok) { text = await r.text(); if (text && text.length > 200) break; }
+      } catch (_) {}
+    }
+    if (!text) return {};
+    const out = {};
+    const m = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(text);
+    if (m) {
+      try {
+        const root = JSON.parse(m[1]);
+        const beaches = root?.props?.pageProps?.county?.beaches || root?.pageProps?.county?.beaches || [];
+        for (const b of beaches) {
+          const ls = b.latestSample; if (!ls) continue;
+          const name = (b.name || ls.beachName || "").trim().toUpperCase();
+          if (!name) continue;
+          out[name] = {
+            status: (ls.enterococcusStatus || "").trim() || null,
+            sample_date: ls.sampleDate || null,
+            enterococcus: ls.enterococcusValue != null ? String(ls.enterococcusValue) : null,
+            advisory: (ls.advisoryStatus || "").trim() || null,
+            site_name: name,
+          };
+        }
+      } catch (_) {}
+    }
+    if (!Object.keys(out).length) {
+      const re = /([A-Z][A-Z0-9 .'\/()\-]+?)\s+(Good|Moderate|Poor|Caution|Advisory|Closed)\s+Latest Sample:\s*(\d{1,2}\/\d{1,2}\/\d{4})\s+Enterococcus Level:\s*([<>]?\s*[\d,]+)/gi;
+      let mm; while ((mm = re.exec(text))) {
+        out[mm[1].trim().toUpperCase()] = {
+          status: mm[2].charAt(0).toUpperCase() + mm[2].slice(1).toLowerCase(),
+          sample_date: mm[3], enterococcus: mm[4].replace(/\s+/g, ""), advisory: null, site_name: mm[1].trim().toUpperCase(),
+        };
+      }
+    }
+    return out;
+  })();
+  bacteriaCountyCache.set(county, p);
+  return p;
+}
+async function fetchBacteria(b) {
+  const mapping = BACTERIA_SITES[b.name];
+  if (!mapping) return null;
+  const county = await fetchBacteriaCounty(mapping.county);
+  const rec = county[mapping.site];
+  if (!rec) return null;
+  return {
+    site_name: mapping.site.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()),
+    status: rec.status,
+    sample_date: rec.sample_date,
+    enterococcus: rec.enterococcus,
+    is_nearest: mapping.match === "nearest",
+    url: `https://www.floridahealthybeaches.com/county/${mapping.county}`,
+  };
+}
 const RIP_ORDER = {Low: 0, Moderate: 1, High: 2};
 async function fetchRipFromAlerts() {
   const d = await getJson("https://api.weather.gov/alerts/active?zone=FLZ050,FLZ151,FLZ155,FLZ160,FLZ162", 1);
@@ -480,7 +567,7 @@ function resolve(n, o, dOut, extras = {}) {
 }
 
 /* --------------------------------------------------------------- decision */
-function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
+function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy, bacteriaStatus, bacteriaIsProxy}) {
   const nogo = [];
   let radarIdx = -1;
   const missing = [["feels", avgFeels], ["wind", wind], ["rain", rain], ["sun", sun]].filter(([, v]) => v == null).map(([k]) => k);
@@ -492,6 +579,8 @@ function decide({avgFeels, wind, rain, sun, feelsLow, redTide, precipWhy}) {
   if (precipWhy) { nogo.push(precipWhy); radarIdx = nogo.length - 1; }
   if (radarIdx >= 0) nogo[radarIdx] += " (check radar)";
   if (redTide === "moderate" || redTide === "severe") nogo.push(`red tide ${redTide}`);
+  const bact = (bacteriaStatus || "").toLowerCase();
+  if (["poor", "advisory", "closed"].includes(bact) && !bacteriaIsProxy) nogo.push(`water quality ${bact}`);
   if (nogo.length) return {label: "NO-GO", why: nogo.join("; ")};
   if (missing.length) return {label: "UNKNOWN", why: "missing: " + missing.join(", ")};
   return {label: "GO", why: "all clear"};
@@ -516,13 +605,13 @@ async function fetchBeachData(b) {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
   });
   const hourMatcher = (date, h) => windowHours(sunrise[date] ?? null).includes(h);
-  const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
-    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
+  const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap, bact] = await Promise.all([
+    fetchHRRR(b, hourMatcher), fetchNBM(b, hourMatcher), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b), fetchBacteria(b)
   ]);
-  return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap};
+  return {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap, bact};
 }
 function computeRows(b, data, dates, win) {
-  const {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap} = data;
+  const {om, hrrr, nbm, rt, nwsRaw, hourly, cloudMap, bact} = data;
   const sunrise = {};
   (om?.daily?.time || []).forEach((d, i) => {
     const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
@@ -541,13 +630,15 @@ function computeRows(b, data, dates, win) {
     const passed = dOut === 0 && etParts(new Date()).hour > Math.max(...hours);
     const rainCall = u.rain == null ? null : Math.round(u.rain);
     const d = decide({avgFeels: u.feelsAvg, wind: u.wind, rain: rainCall, sun,
-                      feelsLow: u.feelsLow, redTide: rt_sev, precipWhy: imm.flag ? imm.why : null});
+                      feelsLow: u.feelsLow, redTide: rt_sev, precipWhy: imm.flag ? imm.why : null,
+                      bacteriaStatus: bact?.status, bacteriaIsProxy: !!bact?.is_nearest});
     let coldH = null, coldV = Infinity;
     for (const [h, v] of Object.entries(u.feelsHourly)) if (v < coldV) { coldV = v; coldH = +h; }
     const call = passed ? {label: "PASSED", why: "window has ended"} : d;
     const wdir = avgDir([...(n?.dirs || []), ...(o?.dirs || [])]);
     const ch = mergeHourly(n?.skyH, o?.cloudH), h0 = hours[0], h1 = hours[hours.length - 1];
-    const cloudTrend = hours.length > 1 && ch[h0] != null && ch[h1] != null ? {a: ch[h0], b: ch[h1], h0, h1} : null;
+    const cloudTrend = hours.length > 1 && ch[h0] != null && ch[h1] != null
+      ? {a: Math.max(0, 100 - Math.round(ch[h0])), b: Math.max(0, 100 - Math.round(ch[h1])), h0, h1} : null;
     return {date, hours, winEnd: win[1], n, o, u, sun, rain: rainCall,
             hrrr: hr, nbm: nb, hourlyRain, coldH,
             close: call.label === "GO" ? closeCalls({avgFeels: u.feelsAvg, feelsLow: u.feelsLow, wind: u.wind, rain: rainCall, sun}) : [],
@@ -562,7 +653,8 @@ async function evaluateBeach(b, dates, win = [WIN_START, WIN_END]) {
 function buildResult(b, data, dates, win) {
   const key = w => w.join("-"), byWindow = {};
   for (const w of [win, ...WINDOWS.filter(x => key(x) !== key(win))]) byWindow[key(w)] = computeRows(b, data, dates, w);
-  return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable"}};
+  return {beach: b, rows: byWindow[key(win)], byWindow, rt: data.rt, bact: data.bact,
+    sources: {nws: !!data.nwsRaw, om: !!data.om, hrrr: !!(data.hrrr && Object.keys(data.hrrr).length), nbm: !!(data.nbm && Object.keys(data.nbm).length), redtide: data.rt.status !== "unavailable", bacteria: !!data.bact}};
 }
 
 /* ----------------------------------------------------------------------- UI */
@@ -591,8 +683,17 @@ if (typeof document !== "undefined") {
     return `<table class="ovt"><thead><tr><th>Day</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
   }
   function render(res, winKey) {
-    const b = res.beach, rt = res.rt, src = res.sources;
+    const b = res.beach, rt = res.rt, src = res.sources, bact = res.bact;
     const rtTxt = rt.status === "detected" ? `${rt.severity} (${Math.round(rt.count).toLocaleString()} cells/L)` : rt.status;
+    let wqTxt = "Water quality: unavailable";
+    if (bact?.status) {
+      const nearest = bact.is_nearest ? ` <span class="small">(nearest: ${esc(bact.site_name)})</span>` : "";
+      const ent = bact.enterococcus != null ? ` · Enterococcus ${esc(bact.enterococcus)}` : "";
+      const samp = bact.sample_date ? ` (sampled ${esc(bact.sample_date)})` : "";
+      wqTxt = `Water quality: <b>${esc(bact.status)}</b>${ent}${samp}${nearest}`;
+    } else if (BACTERIA_SITES[b.name]) {
+      wqTxt = `Water quality: <a href="https://www.floridahealthybeaches.com/county/${BACTERIA_SITES[b.name].county}" target="_blank" rel="noopener">check Healthy Beaches</a>`;
+    }
     const sourceWarn = [!src.nws && "NWS unavailable", !src.om && "Open-Meteo unavailable", !src.redtide && "Red tide unavailable"].filter(Boolean);
     const warn = (sourceWarn.length ? `<p class="err">Source status: ${sourceWarn.join("; ")}.</p>` : "");
     const rows = (res.byWindow[winKey] || res.rows).map(r => {
@@ -608,7 +709,7 @@ if (typeof document !== "undefined") {
         r.hourlyRain != null ? `Hrly ${r.hourlyRain}%` : null].filter(Boolean).map(s => " · " + s).join("");
       const rainMore = [r.thunder ? "⚡ thunder possible" : null, r.precipIn != null ? `≈${r.precipIn.toFixed(2)} in (OM)` : null].filter(Boolean).join(" · ");
       const closeNote = r.close?.length ? `<span class="small">close call: ${esc(r.close.join(", "))}</span>` : "";
-      const cloudTrend = r.cloudTrend ? `<span class="small">cloud ${r.cloudTrend.a}%→${r.cloudTrend.b}% (${hourLabel(r.cloudTrend.h0)}→${hourLabel(r.cloudTrend.h1)})</span>` : "";
+      const cloudTrend = r.cloudTrend ? `<span class="small">sun ${r.cloudTrend.a}%→${r.cloudTrend.b}% (${hourLabel(r.cloudTrend.h0)}→${hourLabel(r.cloudTrend.h1)})</span>` : "";
       const windDir = r.windDir == null ? "" : `<span class="small">from ${compass(r.windDir)} · ${r.windTag}</span>`;
       return `<tr>
         <td>${esc(dayLabel(r.date))}<span class="small">${win}</span></td>
@@ -621,14 +722,14 @@ if (typeof document !== "undefined") {
         <td class="why">${esc(r.why)}${closeNote}</td></tr>`;
     }).join("");
     return `<h2>${esc(b.name)}</h2>
-      <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · Water quality · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
+      <p class="meta">Red tide (FWC, 15 mi, 8 days): ${esc(rtTxt)} · ${wqTxt} · <a href="${b.link}" target="_blank" rel="noopener">VisitBeaches report</a></p>
       ${warn}${overview(res)}<div class="wrap"><table><thead><tr><th>Day</th><th>Call</th><th>Avg feels</th><th>Coldest hour</th><th>Rain</th><th>Sun</th><th>Wind (max)</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v5:";
+  const CACHE = "beachForecast:v7:";
   const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
     try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}
