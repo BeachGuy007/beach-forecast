@@ -23,7 +23,7 @@ function loadApp() {
     fetch: async () => { throw new Error("unexpected fetch in unit test"); },
   });
   vm.runInContext(`${script}\n;globalThis.__test = {
-    windowHours, resolve, fetchOmModelRain, fetchRipFromSrf,
+    windowHours, resolve, modelWindowRain, fetchOmModelRain, fetchRipFromSrf, decide,
     setGetJson(fn) { getJson = fn; },
     setWindow(start, end) { WIN_START = start; WIN_END = end; },
   };`, context);
@@ -44,17 +44,21 @@ test("rain estimate averages available sources and ignores missing ones", () => 
   assert.equal(result.rain, 50);
 });
 
-test("HRRR/NBM matcher excludes hours before the daylight-trimmed window", async () => {
+test("HRRR/NBM fetch preserves hourly PoP so each window aggregates independently", async () => {
   const app = loadApp();
   app.setGetJson(async () => ({ hourly: {
-    time: ["2026-11-04T06:00", "2026-11-04T07:00", "2026-11-04T08:00", "2026-11-04T09:00", "2026-11-04T10:00"],
-    precipitation_probability: [0, 0, 30, 60, 0],
+    time: ["2026-11-04T06:00", "2026-11-04T07:00", "2026-11-04T08:00", "2026-11-04T09:00", "2026-11-04T10:00",
+           "2026-11-04T11:00", "2026-11-04T12:00"],
+    precipitation_probability: [0, 0, 30, 60, 0, 90, 80],
   } }));
-  const result = await app.fetchOmModelRain(
-    { lat: 27, lon: -82 }, "gfs_hrrr", 2,
-    (_date, hour) => hour >= 8 && hour <= 10,
-  );
-  assert.equal(result["2026-11-04"], 45); // smoothed peak of [30, 60, 0]
+  const raw = await app.fetchOmModelRain({ lat: 27, lon: -82 }, "gfs_hrrr", 2);
+  // Hourly map, not a daily scalar
+  assert.equal(typeof raw["2026-11-04"], "object");
+  assert.equal(raw["2026-11-04"][8], 30);
+  assert.equal(raw["2026-11-04"][11], 90);
+  // Different windows see different rain
+  assert.equal(app.modelWindowRain(raw, "2026-11-04", [6, 10]), 30);   // smoothed peak of [0,0,30,60,0] → 30
+  assert.equal(app.modelWindowRain(raw, "2026-11-04", [10, 12]), 85);  // afternoon rain [0,90,80] → 85
 });
 
 test("surf-zone parser accepts multiple punctuation marks before risk", async () => {
@@ -68,7 +72,16 @@ test("surf-zone parser accepts multiple punctuation marks before risk", async ()
   assert.equal(await app.fetchRipFromSrf(), "Moderate");
 });
 
-test("rain providers are passed the sunrise-trimmed matcher", () => {
-  assert.match(script, /const hourMatcher = \(date, h\) => windowHours\(sunrise\[date\] \?\? null\)\.includes\(h\)/);
-  assert.match(script, /fetchHRRR\(b, hourMatcher\), fetchNBM\(b, hourMatcher\)/);
+test("missing coldest-hour is treated as UNKNOWN", () => {
+  const app = loadApp();
+  const d = app.decide({ avgFeels: 78, wind: 5, rain: 5, sun: 90, feelsLow: null });
+  assert.equal(d.label, "UNKNOWN");
+  assert.match(d.why, /coldest hour/);
+});
+
+test("no hourMatcher is applied at fetch time (hourly data is kept)", () => {
+  // After the fix, fetchHRRR/fetchNBM are called without a matcher and store hourly maps.
+  assert.doesNotMatch(script, /const hourMatcher = \(date, h\) => windowHours/);
+  assert.match(script, /fetchHRRR\(b\), fetchNBM\(b\)/);
+  assert.match(script, /modelWindowRain\(hrrr, date, hours\)/);
 });
