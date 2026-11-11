@@ -85,3 +85,9 @@ test("no hourMatcher is applied at fetch time (hourly data is kept)", () => {
   assert.match(script, /fetchHRRR\(b\), fetchNBM\(b\)/);
   assert.match(script, /modelWindowRain\(hrrr, date, hours\)/);
 });
+
+test("Open-Meteo family adds HRRR and NBM through day 2 only", () => {
+  const app = loadApp();
+  assert.equal(app.resolve({ rain: 20 }, { rain: 40 }, 2, { hrrr: 60, nbm: 80 }).rain, 40);   // (20 + (40+60+80)/3) / 2
+  assert.equal(app.resolve({ rain: 20 }, { rain: 40 }, 3, { hrrr: 60, nbm: 80 }).rain, 30);   // (20 + 40) / 2
+});
