@@ -35,12 +35,15 @@ A rain-related reason always ends with *(check radar)*.
   values are blended — there is no single shared feels-like formula.
 - **Sun:** 100 minus cloud cover; NWS sky cover averaged with the mean of four Open-Meteo models.
 - **Rain:** average of two source families, NWS (grid + hourly on day 0) and Open-Meteo (default
-  model + HRRR + NBM on days 0–1). Hourly model PoP is kept per hour and aggregated per window so
+  model + HRRR + NBM on days 0–2). Hourly model PoP is kept per hour and aggregated per window so
   side-by-side calls stay correct. Averaging per family stops one forecast being counted several times.
 - **Display only (never changes the call):** wind direction and onshore/offshore, rain amount,
   "thunder possible", and the rip-current level (a High risk shows a warning line).
 
-Water quality and the crowd model live only in the Python reports (not in this repo).
+Water quality (bacteria) and the crowd model live only in the Python reports (not in this repo), so the
+Python e-mail can show NO-GO for a poor-water day that this page calls GO. Everything else is meant to match
+the Python reports exactly; the Python test suite runs this page's own `resolve()` and `decide()` against the
+Python on 400 random inputs to keep it that way.
 
 ## Tests
 ```

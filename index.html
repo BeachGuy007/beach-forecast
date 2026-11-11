@@ -538,10 +538,6 @@ function closeCalls({avgFeels, feelsLow, wind, rain, sun}) {
 /* ----------------------------------------------------------- beach pipeline */
 async function fetchBeachData(b) {
   const om = await fetchOM(b);
-  const sunrise = {};
-  (om?.daily?.time || []).forEach((d, i) => {
-    const s = om.daily.sunrise?.[i]; if (s) { const [hh, mm] = s.split("T")[1].split(":"); sunrise[d] = +hh + (+mm) / 60; }
-  });
   const [hrrr, nbm, rt, nwsRaw, hourly, cloudMap] = await Promise.all([
     fetchHRRR(b), fetchNBM(b), fetchRedTide(b), fetchNWS(b), fetchNWSHourly(b), fetchCloud(b)
   ]);
