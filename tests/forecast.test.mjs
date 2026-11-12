@@ -23,7 +23,7 @@ function loadApp() {
     fetch: async () => { throw new Error("unexpected fetch in unit test"); },
   });
   vm.runInContext(`${script}\n;globalThis.__test = {
-    windowHours, resolve, modelWindowRain, fetchOmModelRain, fetchRipFromSrf, decide,
+    windowHours, resolve, modelWindowRain, fetchOmModelRain, fetchRipFromSrf, ripFromSrfText, decide,
     setGetJson(fn) { getJson = fn; },
     setWindow(start, end) { WIN_START = start; WIN_END = end; },
   };`, context);
@@ -90,4 +90,15 @@ test("Open-Meteo family adds HRRR and NBM through day 2 only", () => {
   const app = loadApp();
   assert.equal(app.resolve({ rain: 20 }, { rain: 40 }, 2, { hrrr: 60, nbm: 80 }).rain, 40);   // (20 + (40+60+80)/3) / 2
   assert.equal(app.resolve({ rain: 20 }, { rain: 40 }, 3, { hrrr: 60, nbm: 80 }).rain, 30);   // (20 + 40) / 2
+});
+
+test("rip current: only the first (current-period) risk in each zone block counts", () => {
+  const app = loadApp();
+  const today = "FLZ050-051\nToday...\nRip Current Risk*...Low.\nTomorrow...\nRip Current Risk*...High.\n$$";
+  assert.equal(app.ripFromSrfText(today), "Low");
+  const two = today + "\nFLZ155\nRip Current Risk*...Moderate.\nRip Current Risk*...High.\n$$";
+  assert.equal(app.ripFromSrfText(two), "Moderate");                    // highest across zones, current period only
+  assert.equal(app.ripFromSrfText("FLZ162\nRip Current Risk*...Extreme.\n$$"), "High");
+  assert.equal(app.ripFromSrfText("FLZ999\nRip Current Risk*...High.\n$$"), null);   // not a beach zone
+  assert.equal(app.ripFromSrfText(""), null);
 });

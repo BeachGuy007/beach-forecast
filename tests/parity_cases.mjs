@@ -2,7 +2,13 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+// the live page: BEACH_HTML, else ../index.html (the repo), else ../github/index.html (the script folder)
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+const pagePath = [process.env.BEACH_HTML, here("../index.html"), here("../github/index.html")].find(p => p && existsSync(p));
+if (!pagePath) throw new Error("live page not found (set BEACH_HTML)");
+const html = readFileSync(pagePath, "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const context = vm.createContext({
   document: undefined, location: { search: "" }, URLSearchParams, Intl, Date, Math, Map, Set,
