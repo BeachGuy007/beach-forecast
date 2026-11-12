@@ -371,6 +371,21 @@ async function fetchRipFromAlerts() {
   }
   return best;
 }
+// Highest risk across the beach zones, using ONLY the first "Rip Current Risk" in each zone's block (the current
+// period; later periods in the same block are tomorrow's outlook). Same rule as the Python report.
+function ripFromSrfText(body) {
+  const zones = ["FLZ050", "FLZ151", "FLZ155", "FLZ160", "FLZ162"];
+  const re = /Rip\s+Current\s+Risk\*?\.+\s*(Low|Moderate|High|Extreme)\b/i;
+  const found = [];
+  for (const block of String(body || "").split("$$")) {
+    if (!zones.some(z => block.slice(0, 300).includes(z))) continue;
+    const m = re.exec(block);
+    if (!m) continue;
+    const lvl = m[1].toLowerCase() === "extreme" ? "High" : m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+    if (lvl in RIP_ORDER) found.push(lvl);
+  }
+  return found.length ? found.reduce((a, b) => (RIP_ORDER[b] > RIP_ORDER[a] ? b : a)) : null;
+}
 async function fetchRipFromSrf() {
   try {
     const list = await getJson("https://api.weather.gov/products/types/SRF/locations/TBW", 1);
@@ -378,24 +393,7 @@ async function fetchRipFromSrf() {
     const productUrl = graph[0]?.["@id"] || graph[0]?.id;
     if (!productUrl) return null;
     const prod = await getJson(productUrl, 1);
-    const body = prod?.productText || "";
-    if (!body) return null;
-    const zones = ["FLZ050", "FLZ151", "FLZ155", "FLZ160", "FLZ162"];
-    const found = [];
-    const re = /Rip\s+Current\s+Risk\*?\.+\s*(Low|Moderate|High|Extreme)\b/gi;
-    for (const block of body.split("$$")) {
-      if (!zones.some(z => block.slice(0, 300).includes(z))) continue;
-      let m;
-      const local = new RegExp(re.source, "gi");
-      while ((m = local.exec(block)) !== null) {
-        const raw = m[1];
-        const lvl = raw.toLowerCase() === "extreme" ? "High"
-                  : raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
-        if (lvl in RIP_ORDER) found.push(lvl);
-      }
-    }
-    if (!found.length) return null;
-    return found.reduce((a, b) => (RIP_ORDER[b] > RIP_ORDER[a] ? b : a));
+    return ripFromSrfText(prod?.productText);
   } catch (_) { return null; }
 }
 async function fetchRip() {
