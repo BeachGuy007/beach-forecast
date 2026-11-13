@@ -8,9 +8,9 @@
 <!--
   Live Beach Go/No-Go. One file, no build step; host it anywhere (GitHub Pages works).
   It calls NWS (api.weather.gov), Open-Meteo and FWC straight from the browser.
-  Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for temperature and
-  wind; each provider supplies its own apparent temperature (NWS apparentTemperature /
-  Open-Meteo apparent_temperature), then those values are blended. Sun % = 100 - cloud cover;
+  Same rules as the Python reports: NWS and Open-Meteo averaged 50/50 for air temperature,
+  humidity and wind; feels-like is the NWS rule applied once to that blend (heat index at
+  >=80F, wind chill at <=50F and wind >3 mph, else air temperature). Sun % = 100 - cloud cover;
   rain = average of two source families (NWS and Open-Meteo). NWS hourly can force a NO-GO
   when rain is imminent.
   Water quality links to the exact Florida Healthy Beaches sample site
@@ -124,6 +124,28 @@ function bacteriaLabel(mapping) {
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
 const cToF = c => Math.round(c * 9 / 5 + 32);
+/* NWS apparent temperature (same rule as Python units.feels_like_f / weather.gov) */
+function heatIndexF(t, rh) {
+  const simple = 0.5 * (t + 61.0 + (t - 68.0) * 1.2 + rh * 0.094);
+  if ((simple + t) / 2 < 80.0) return simple;
+  let hi = -42.379 + 2.04901523 * t + 10.14333127 * rh - 0.22475541 * t * rh
+    - 0.00683783 * t * t - 0.05481717 * rh * rh + 0.00122874 * t * t * rh
+    + 0.00085282 * t * rh * rh - 0.00000199 * t * t * rh * rh;
+  if (rh < 13 && t >= 80 && t <= 112) hi -= ((13 - rh) / 4) * Math.sqrt((17 - Math.abs(t - 95.0)) / 17);
+  else if (rh > 85 && t >= 80 && t <= 87) hi += ((rh - 85) / 10) * ((87 - t) / 5);
+  return hi;
+}
+function feelsLikeF(tempF, rhPct, windMph) {
+  if (tempF >= 80.0 && rhPct != null) {
+    const hi = heatIndexF(tempF, rhPct);
+    return hi >= 80.0 ? hi : tempF;
+  }
+  if (tempF <= 50.0 && windMph != null && windMph > 3.0) {
+    const v16 = Math.pow(windMph, 0.16);
+    return 35.74 + 0.6215 * tempF - 35.75 * v16 + 0.4275 * tempF * v16;
+  }
+  return tempF;
+}
 const kphToMph = k => Math.round(k * 0.621371);
 const hourLabel = h => `${h % 12 || 12}${h < 12 ? "a" : "p"}`;
 const etFmt = new Intl.DateTimeFormat("en-CA", {timeZone: ET, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", hourCycle:"h23"});
@@ -250,7 +272,7 @@ function fetchNWSPoints(b) {
 }
 async function fetchOM(b) {
   const u = "https://api.open-meteo.com/v1/forecast?latitude=" + b.lat + "&longitude=" + b.lon +
-    "&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m" +
+    "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m" +
     "&daily=sunrise&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FNew_York&forecast_days=8";
   return getJson(u);
 }
@@ -336,7 +358,7 @@ async function fetchNWS(b) {
   const p = g?.properties;
   if (!p) return null;
   const f = k => expandField(p[k]?.values);
-  return {sky: f("skyCover"), wind: f("windSpeed"), temp: f("temperature"), feels: f("apparentTemperature"),
+  return {sky: f("skyCover"), wind: f("windSpeed"), temp: f("temperature"), rh: f("relativeHumidity"),
           dir: f("windDirection"), pop: expandPop(p.probabilityOfPrecipitation?.values)};
 }
 const RT_URL = "https://gis.myfwc.com/mapping/rest/services/Open_Data/Recent_Harmful_Algal_Bloom__HAB__Events_2024_present/MapServer/7/query";
@@ -424,13 +446,18 @@ function nwsDay(nws, date, hours, prevDate) {
   const pick = (field) => {
     const o = {}; for (const h of hours) { const v = nws[field]?.[date]?.[h]; if (v != null) o[h] = v; } return o;
   };
-  const tC = pick("temp"), fC = pick("feels"), wk = pick("wind"), skyH = pick("sky"), sky = Object.values(skyH);
+  const tC = pick("temp"), rhC = pick("rh"), wk = pick("wind"), skyH = pick("sky"), sky = Object.values(skyH);
   if (!Object.keys(tC).length) return null;
   const wind = {}; for (const [h, v] of Object.entries(wk)) wind[h] = kphToMph(v);
-  const feelsH = {};
-  for (const [h, c] of Object.entries(tC)) feelsH[h] = Math.round(cToF(fC[h] ?? c));   // NWS's own number; air temp only if it is missing
+  const tempH = {}, rhH = {}, feelsH = {};
+  for (const [h, c] of Object.entries(tC)) {
+    const t = cToF(c);
+    tempH[h] = t;
+    if (rhC[h] != null) rhH[h] = rhC[h];
+    feelsH[h] = Math.round(feelsLikeF(t, rhC[h] ?? null, wind[h] ?? null));
+  }
   const s = summarizeFeels(feelsH), wv = Object.values(wind);
-  return {feelsH, feelsLow: s.low, feelsAvg: s.avg,
+  return {feelsH, tempH, rhH, windH: wind, feelsLow: s.low, feelsAvg: s.avg,
           sky: sky.length ? Math.round(avg(sky)) : null, skyH,
           rain: nwsWindowPop(nws.pop[date], hours, nws.pop[prevDate]),
           wind: wv.length ? Math.max(...wv) : null, dirs: Object.values(pick("dir"))};
@@ -453,20 +480,27 @@ function omDay(om, date, hours, cloudMap = {}) {
   const H = om.hourly, rows = [];
   H.time.forEach((ts, i) => {
     const [d, hh] = ts.split("T"); const h = +hh.slice(0, 2);
-    if (d === date && hours.includes(h)) rows.push({h, t: H.temperature_2m[i], feels: H.apparent_temperature?.[i] ?? null,
+    if (d === date && hours.includes(h)) rows.push({h, t: H.temperature_2m[i], rh: H.relative_humidity_2m?.[i] ?? null,
       rain: H.precipitation_probability[i], cloud: cloudMap[d]?.[h] ?? H.cloud_cover[i], wind: H.wind_speed_10m[i],
       dir: H.wind_direction_10m?.[i] ?? null, mm: H.precipitation?.[i] ?? null});
   });
   const warm = rows.filter(r => r.t != null);
   if (!warm.length) return null;
-  const feelsH = {}; for (const r of warm) feelsH[r.h] = Math.round(r.feels ?? r.t);   // Open-Meteo's own number; air temp only if it is missing
+  const feelsH = {}, tempH = {}, rhH = {}, windH = {};
+  for (const r of warm) {
+    const t = Math.round(r.t);
+    tempH[r.h] = t;
+    if (r.rh != null) rhH[r.h] = r.rh;
+    if (r.wind != null) windH[r.h] = r.wind;
+    feelsH[r.h] = Math.round(feelsLikeF(t, r.rh, r.wind));
+  }
   const s = summarizeFeels(feelsH);
   const rain = rows.map(r => r.rain).filter(v => v != null), cl = rows.map(r => r.cloud).filter(v => v != null),
         w = rows.map(r => r.wind).filter(v => v != null);
   const sky = cl.length ? Math.round(avg(cl)) : null;
   const mm = rows.map(r => r.mm).filter(v => v != null);
   const cloudH = {}; for (const r of rows) if (r.cloud != null) cloudH[r.h] = Math.round(r.cloud);
-  return {feelsH, feelsLow: s.low, feelsAvg: s.avg, sky, cloudH, sun: sky == null ? null : 100 - sky,
+  return {feelsH, tempH, rhH, windH, feelsLow: s.low, feelsAvg: s.avg, sky, cloudH, sun: sky == null ? null : 100 - sky,
           rain: smoothedPeak(rain), wind: w.length ? Math.round(Math.max(...w)) : null,
           dirs: rows.map(r => r.dir).filter(v => v != null), precipIn: mm.length ? mm.reduce((a, x) => a + x, 0) / 25.4 : null};
 }
@@ -495,7 +529,15 @@ function resolve(n, o, dOut, extras = {}) {
   const valid = [...nwsFam, ...omFam];
   const rainSpread = valid.length ? {min: Math.min(...valid), max: Math.max(...valid), count: valid.length} : null;
   const sky = blend(n.sky, o.sky);
-  const feelsHourly = mergeHourly(n.feelsH, o.feelsH);
+  // Blend air temperature, humidity and wind hour-by-hour, then apply the NWS feels-like rule once
+  // (matches Python resolve_scoring_inputs). Do not average vendor apparent-temperature fields.
+  const tempH = mergeHourly(n.tempH, o.tempH);
+  const rhH = mergeHourly(n.rhH, o.rhH);
+  const windH = mergeHourly(n.windH, o.windH);
+  const feelsHourly = {};
+  for (const h of Object.keys(tempH)) {
+    feelsHourly[h] = Math.round(feelsLikeF(tempH[h], rhH[h] ?? null, windH[h] ?? null));
+  }
   const fvals = Object.values(feelsHourly);
   const feelsLow = fvals.length ? Math.min(...fvals) : rnd(blend(n.feelsLow, o.feelsLow));
   const feelsAvg = fvals.length ? Math.round(avg(fvals)) : rnd(blend(n.feelsAvg, o.feelsAvg));
@@ -657,7 +699,7 @@ if (typeof document !== "undefined") {
   const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v9:";
+  const CACHE = "beachForecast:v10:";
   const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
     try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}

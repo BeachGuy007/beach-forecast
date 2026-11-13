@@ -167,8 +167,8 @@ test("results are saved and shown instantly on the next visit", async () => {
   const b = stubBrowser();
   load({ document: b.document, localStorage: b.localStorage, fetch: b.fetch });
   await settle();
-  assert.ok(b.store["beachForecast:v9:Siesta Key"]);
-  const b2 = stubBrowser(); b2.store["beachForecast:v9:Siesta Key"] = b.store["beachForecast:v9:Siesta Key"];
+  assert.ok(b.store["beachForecast:v10:Siesta Key"]);
+  const b2 = stubBrowser(); b2.store["beachForecast:v10:Siesta Key"] = b.store["beachForecast:v10:Siesta Key"];
   load({ document: b2.document, localStorage: b2.localStorage, fetch: b2.fetch });
   assert.match(b2.els.out.innerHTML, /Siesta Key/);       // painted from the saved copy before any network answer
 });
