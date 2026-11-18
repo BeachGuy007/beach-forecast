@@ -73,7 +73,11 @@ let WIN_START = 6, WIN_END = 10;            // selected window (inclusive hours)
 const WINDOWS = [[6, 10], [9, 13], [10, 15]];   // all three are computed from one fetch
 const DAYLIGHT_LEAD_H = 0.75;               // start ~45 min before sunrise
 const RAIN_EVENT_H = 3, POP_LONG_BLOCK_H = 6;
-const BLEND_NWS = 0.5;                      // equal NWS / Open-Meteo
+// Per-field NWS weights (match Python scoring.py; from accuracy log Nov 2026)
+const BLEND_NWS_TEMP = 0.70, BLEND_NWS_TEMP_LONG = 0.90;
+const BLEND_NWS_SKY = 0.85, BLEND_NWS_SKY_LONG = 0.95;
+const BLEND_NWS_WIND = 0.45;
+const BLEND_NWS = BLEND_NWS_TEMP;              // legacy alias
 const BATCH_SIZE = 2;                       // keep browser fetches bounded for All beaches
 let GO_AVG_FEELS_MIN = 72, GO_FEELS_LOW_MIN = 70, GO_WIND_NOGO = 15, GO_RAIN_NOGO = 45, GO_SUN_MIN = 50;
 const PRIMARY = "Siesta Key";
@@ -507,20 +511,24 @@ function omDay(om, date, hours, cloudMap = {}) {
 
 /* --------------------------------------------------------------- blending */
 const rnd = x => x == null ? null : Math.round(x);
-function blend(a, b) {
-  if (a != null && b != null) return a * BLEND_NWS + b * (1 - BLEND_NWS);
+function blend(a, b, w = BLEND_NWS) {
+  if (a != null && b != null) return a * w + b * (1 - w);
   return a != null ? a : b;
 }
-function mergeHourly(n, o) {
+function mergeHourly(n, o, w = BLEND_NWS) {
   const out = {};
   for (const h of [...new Set([...Object.keys(n || {}), ...Object.keys(o || {})])].sort((x, y) => x - y)) {
     const a = n?.[h], b = o?.[h];
-    out[h] = (a != null && b != null) ? Math.round(a * BLEND_NWS + b * (1 - BLEND_NWS)) : (a != null ? a : b);
+    out[h] = (a != null && b != null) ? Math.round(a * w + b * (1 - w)) : (a != null ? a : b);
   }
   return out;
 }
 function resolve(n, o, dOut, extras = {}) {
   n = n || {}; o = o || {};
+  const long = dOut >= 4;
+  const wTemp = long ? BLEND_NWS_TEMP_LONG : BLEND_NWS_TEMP;
+  const wSky = long ? BLEND_NWS_SKY_LONG : BLEND_NWS_SKY;
+  const wWind = BLEND_NWS_WIND;
   const {hrrr = null, nbm = null, hourlyRain = null} = extras;
   const nwsFam = (dOut === 0 ? [n.rain, hourlyRain] : [n.rain]).filter(x => x != null);
   const omFam = (dOut <= 2 ? [o.rain, hrrr, nbm] : [o.rain]).filter(x => x != null);
@@ -528,20 +536,20 @@ function resolve(n, o, dOut, extras = {}) {
   const rain = fams.length ? fams.reduce((a, x) => a + x, 0) / fams.length : null;
   const valid = [...nwsFam, ...omFam];
   const rainSpread = valid.length ? {min: Math.min(...valid), max: Math.max(...valid), count: valid.length} : null;
-  const sky = blend(n.sky, o.sky);
-  // Blend air temperature, humidity and wind hour-by-hour, then apply the NWS feels-like rule once
+  const sky = blend(n.sky, o.sky, wSky);
+  // Blend air temperature, humidity and wind hour-by-hour (per-field weights), then apply the NWS feels-like rule once
   // (matches Python resolve_scoring_inputs). Do not average vendor apparent-temperature fields.
-  const tempH = mergeHourly(n.tempH, o.tempH);
-  const rhH = mergeHourly(n.rhH, o.rhH);
-  const windH = mergeHourly(n.windH, o.windH);
+  const tempH = mergeHourly(n.tempH, o.tempH, wTemp);
+  const rhH = mergeHourly(n.rhH, o.rhH, wTemp);
+  const windH = mergeHourly(n.windH, o.windH, wWind);
   const feelsHourly = {};
   for (const h of Object.keys(tempH)) {
     feelsHourly[h] = Math.round(feelsLikeF(tempH[h], rhH[h] ?? null, windH[h] ?? null));
   }
   const fvals = Object.values(feelsHourly);
-  const feelsLow = fvals.length ? Math.min(...fvals) : rnd(blend(n.feelsLow, o.feelsLow));
-  const feelsAvg = fvals.length ? Math.round(avg(fvals)) : rnd(blend(n.feelsAvg, o.feelsAvg));
-  return {feelsAvg, feelsLow, wind: rnd(blend(n.wind, o.wind)), rain, rainSpread, sky, feelsHourly};
+  const feelsLow = fvals.length ? Math.min(...fvals) : rnd(blend(n.feelsLow, o.feelsLow, wTemp));
+  const feelsAvg = fvals.length ? Math.round(avg(fvals)) : rnd(blend(n.feelsAvg, o.feelsAvg, wTemp));
+  return {feelsAvg, feelsLow, wind: rnd(blend(n.wind, o.wind, wWind)), rain, rainSpread, sky, feelsHourly};
 }
 
 /* --------------------------------------------------------------- decision */
@@ -699,7 +707,7 @@ if (typeof document !== "undefined") {
   const sel = document.getElementById("beachSel"), winSel = document.getElementById("winSel"),
         out = document.getElementById("out"), status = document.getElementById("status");
   let currentWin = [WIN_START, WIN_END], results = [], ripLevel = null, running = false, pending = false;
-  const CACHE = "beachForecast:v10:";
+  const CACHE = "beachForecast:v11:";
   const saveCache = choice => { try { localStorage.setItem(CACHE + choice, JSON.stringify({ts: Date.now(), rip: ripLevel, results})); } catch (_) {} };
   const loadCache = choice => {
     try { const c = JSON.parse(localStorage.getItem(CACHE + choice)); if (c && Date.now() - c.ts < 6 * 3600000) return c; } catch (_) {}

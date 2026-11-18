@@ -31,7 +31,7 @@ Open the GitHub Pages site on any phone or tablet.
 A rain-related reason always ends with *(check radar)*.
 
 - **Temperature and wind:** NWS and Open-Meteo air temperature, humidity and wind are averaged 50/50.
-  Feels-like is the NWS rule applied once to that blend (heat index at ≥80°F, wind chill at ≤50°F
+  NWS/OM blend is weighted by field from the accuracy log (temp/sky favor NWS; wind leans OM; temp/sky lean harder on NWS at lead 4+ days). Feels-like is the NWS rule applied once to that blend (heat index at ≥80°F, wind chill at ≤50°F
   and wind >3 mph, otherwise air temperature). Same rule as weather.gov / Weather Underground and
   the Python email reports. Vendor apparent-temperature fields are not averaged.
 - **Sun:** 100 minus cloud cover; NWS sky cover averaged with the mean of four Open-Meteo models.
